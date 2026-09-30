@@ -1,0 +1,33 @@
+{
+  "name": "@justsuperhuman/justimagine",
+  "version": "0.1.0",
+  "description": "Self-hosted image, video, song and voice generation, reusable galleries and a voiced cast.",
+  "type": "module",
+  "bin": { "justimagine": "bin/justimagine.js" },
+  "exports": {
+    ".": "./src/index.js",
+    "./cli": "./src/justimagine.js",
+    "./server": "./src/justimagine-server.js",
+    "./auth": "./src/auth.js",
+    "./generation": "./src/justimagine-gen.js",
+    "./audio": "./src/justimagine-audio.js",
+    "./music-video": "./src/music-video.js",
+    "./music-video-plan": "./src/music-video-plan.js",
+    "./store": "./src/justimagine-store.js",
+    "./characters": "./src/justimagine-characters.js",
+    "./models": "./src/models.js",
+    "./openlux": "./src/openlux.js",
+    "./ui": "./src/ui.js",
+    "./package.json": "./package.json"
+  },
+  "files": ["bin", "src", "skills", "docs", "models.json", "video-models.json", "README.md", "LICENSE"],
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node bin/justimagine.js",
+    "test": "bun test ./src",
+    "check": "node --check src/index.js && node --check src/justimagine.js && node --check src/justimagine-server.js"
+  },
+  "keywords": ["image-generation", "video-generation", "music-generation", "text-to-speech", "gallery", "justimagine"],
+  "author": "JustGains (https://justgains.com)",
+  "license": "MIT"
+}

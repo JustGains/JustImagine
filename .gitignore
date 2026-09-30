@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Local working files, galleries and generated media
+.artifacts/
+.justimagine/
+.bro/
+*.part
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.token
+
+# Build and test output
+*.tgz
+*.log
+coverage/
+dist/
+
+# Editors, OS and local agent settings
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+.claude/settings.local.json
