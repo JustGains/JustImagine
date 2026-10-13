@@ -279,6 +279,7 @@
 .sh-app-glyph svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
 .sh-app-glyph[data-app="justimagine"]{--sh-glyph:#2f5bff}
 .sh-app-glyph[data-app="justposts"]{--sh-glyph:#e0478a}
+.sh-app-glyph[data-app="justmemes"]{--sh-glyph:#7c4dff}
 .sh-app-glyph[data-app="studio"]{--sh-glyph:#0f9d8a}
 .sh-app-glyph[data-app="sites"]{--sh-glyph:linear-gradient(140deg,#ff7a45 0%,#ff3d7f 55%,#a259ff 100%)}
 .sh-app-glyph[data-app="cast"]{--sh-glyph:linear-gradient(140deg,#14b8a6 0%,#0ea5e9 52%,#6366f1 100%)}
