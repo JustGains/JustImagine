@@ -57,7 +57,14 @@
   var glyph = function (id) { return '<span class="sh-app-glyph" data-app="' + esc(id) + '">' + icon(ICONS[id] ? id : 'grid') + '</span>'; };
 
   /* ---------- theme ---------- */
+  // A brand may set the theme people see until they pick one (Admin → Brand: "Theme").
+  var brandMode = function () {
+    var b = window.SH_BRAND || null;
+    if (!b) try { b = JSON.parse(store.get('sh-brand') || 'null'); } catch (e) {}
+    return b && (b.mode === 'light' || b.mode === 'dark') ? b.mode : '';
+  };
   var applyTheme = function (mode) {
+    if (mode !== 'light' && mode !== 'dark') mode = brandMode() || mode;
     if (mode === 'light' || mode === 'dark') root.setAttribute('data-theme', mode);
     else root.removeAttribute('data-theme');
     var meta = doc.querySelector('meta[name="theme-color"]');
@@ -143,6 +150,7 @@
     brand = b && b.name ? b : null; brandKnown = true;
     store.set(BRAND_KEY, brand ? JSON.stringify(brand) : null);
     brandHead(brand); redrawBrands(); applyText();
+    if (getTheme() === 'system' && !root.hasAttribute('data-sh-theme-locked')) applyTheme('system');
   };
   if (brand) brandHead(brand);
   if (doc.readyState === 'loading') doc.addEventListener('DOMContentLoaded', applyText); else applyText();
