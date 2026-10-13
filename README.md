@@ -213,8 +213,8 @@ dependency. Import it by package name, not by paths into `src`:
 For local development, check the repos out side by side:
 
 ```text
-F:/JustImagine
-F:/TekPrepperAI
+F:/JustSuperHuman/JustImagine     (F:/JustImagine is a junction to it)
+F:/JustSuperHuman/JustSuperHost   the Just Superhuman suite
 F:/bro-cli
 ```
 

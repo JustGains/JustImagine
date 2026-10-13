@@ -1,5 +1,5 @@
 /* Just Superhuman shell: theme, brand, app switcher, command palette, toasts.
-   Shared by every app; edit in F:/JustSuperHuman/ui and run `npm run ui:sync`,
+   Shared by every app; edit in F:/JustSuperHuman/JustSuperHost/ui and run `npm run ui:sync`,
    which copies it to each project as superhuman/ (served at that relative path).
 
    <script src="superhuman/shell.js" defer></script> then use:
