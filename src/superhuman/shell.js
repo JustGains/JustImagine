@@ -123,12 +123,29 @@
     return (b.mark ? img(b.mark, 'sh-brand-mark') : '') + (compact ? '' : '<span class="sh-wordmark sh-wordmark--client">' + esc(b.name) + '</span>');
   };
   var redrawBrands = function () { doc.querySelectorAll('sh-brand').forEach(function (el) { if (el._draw) el._draw(); }); };
+  // The brand's sample text (Admin → Brand): SH.text('meme', 'work') in scripts, and in markup
+  // <input placeholder="like work" data-sh-placeholder="meme" data-sh-prefix="like "> (data-sh-first keeps
+  // only the first of a comma list). Without a brand, or a value, the page's own text stays.
+  var text = function (key, fallback) {
+    var c = (brand && brand.content) || (window.SH_BRAND && window.SH_BRAND.content) || null, v = c ? c[key] : null;
+    if (Array.isArray(v)) v = v.join(', ');
+    return v == null || v === '' ? (fallback == null ? '' : fallback) : String(v);
+  };
+  var applyText = function () {
+    doc.querySelectorAll('[data-sh-placeholder]').forEach(function (el) {
+      if (!el.hasAttribute('data-sh-default')) el.setAttribute('data-sh-default', el.getAttribute('placeholder') || '');
+      var v = text(el.getAttribute('data-sh-placeholder'), '');
+      if (v && el.hasAttribute('data-sh-first')) v = v.split(',')[0].trim();
+      el.setAttribute('placeholder', v ? (el.getAttribute('data-sh-prefix') || '') + v : el.getAttribute('data-sh-default'));
+    });
+  };
   var setBrand = function (b) {
     brand = b && b.name ? b : null; brandKnown = true;
     store.set(BRAND_KEY, brand ? JSON.stringify(brand) : null);
-    brandHead(brand); redrawBrands();
+    brandHead(brand); redrawBrands(); applyText();
   };
   if (brand) brandHead(brand);
+  if (doc.readyState === 'loading') doc.addEventListener('DOMContentLoaded', applyText); else applyText();
   if (inSuite()) session().then(function (s) { if (s) setBrand(s.brand || null); else if (!brandKnown) { brandKnown = true; redrawBrands(); } });
 
   /* ---------- toast ---------- */
@@ -319,5 +336,5 @@
   var fixHints = function () { if (isMac) return; doc.querySelectorAll('kbd').forEach(function (k) { if (k.textContent === '⌘K') k.textContent = 'Ctrl K'; }); };
   if (doc.readyState === 'loading') doc.addEventListener('DOMContentLoaded', fixHints); else fixHints();
 
-  window.SH = { version: 1, icon: icon, glyph: glyph, mark: MARK, brand: function () { return brand; }, toast: toast, command: command, openPalette: openPalette, setTheme: setTheme, getTheme: getTheme, isDark: isDark, session: session, signOut: signOut, escape: esc };
+  window.SH = { version: 1, icon: icon, glyph: glyph, mark: MARK, brand: function () { return brand; }, text: text, toast: toast, command: command, openPalette: openPalette, setTheme: setTheme, getTheme: getTheme, isDark: isDark, session: session, signOut: signOut, escape: esc };
 })();
