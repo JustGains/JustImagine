@@ -120,6 +120,37 @@ test('a provider with its own price is not described as quoting OpenRouter', () 
   expect(mediaModelFacts(borrowed, { kind: 'video' }).cost.title).toMatch(/OpenRouter's list price for google\/veo-3\.1/);
 });
 
+test('Seedance 2.5 exposes 30-second clips and builds its native edit and draft requests', () => {
+  const catalogue = structuredClone(CATALOGUE);
+  catalogue.data.push({
+    model_name: 'doubao-seedance-2-5-260628', model_type: '音视频', quota_type: 1,
+    model_price: 0.01, enable_groups: ['Seedance-1'], supported_endpoint_types: ['Doubao video']
+  });
+  const model = mapOpenLuxCatalogue(catalogue).videos.find((entry) => entry.id === 'doubao-seedance-2-5-260628');
+  expect(model).toMatchObject({ api: 'openlux', adapter: 'seedance', resolutions: ['480p', '720p', '1080p'] });
+  expect(model.durations).toContain(30);
+
+  const edit = buildOpenLuxVideoRequest('seedance', {
+    model: model.id, prompt: 'Replace the two characters', duration: 4, resolution: '480p', aspectRatio: '16:9',
+    videoRefs: [{ url: 'https://example.com/silent-guide.mp4' }],
+    refs: [{ dataUrl: 'data:image/png;base64,AAAA' }], generateAudio: false, draft: true
+  });
+  expect(edit.body).toMatchObject({
+    model: model.id, omni_reference_task_type: 'edit', ratio: 'adaptive', duration: -1,
+    resolution: '480p', generate_audio: false, draft: true
+  });
+  expect(edit.body.content.map((entry) => entry.role)).toEqual([undefined, 'reference_video', 'reference_image']);
+  expect(edit.body.content[1].video_url.url).toBe('https://example.com/silent-guide.mp4');
+
+  const final = buildOpenLuxVideoRequest('seedance', {
+    model: model.id, prompt: 'Ignored for draft completion', resolution: '1080p', draftTaskId: 'task_123'
+  });
+  expect(final.body).toEqual({ model: model.id, content: [{ type: 'draft_task', draft_task: { id: 'task_123' } }], resolution: '1080p' });
+  expect(() => buildOpenLuxVideoRequest('seedance', {
+    model: model.id, prompt: 'p', resolution: '720p', draft: true
+  })).toThrow('480p');
+});
+
 // ---------- requests and responses ----------
 
 const frame = { dataUrl: 'data:image/png;base64,AAAA' };
@@ -181,6 +212,11 @@ beforeAll(async () => {
       return;
     }
     const out = typeof handler === 'function' ? handler() : handler;
+    if (out?.httpStatus) {
+      res.writeHead(out.httpStatus, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(out.body || {}));
+      return;
+    }
     if (Buffer.isBuffer(out)) {
       res.writeHead(200, { 'content-type': 'video/mp4' });
       res.end(out);
@@ -231,6 +267,69 @@ test('a Seedance task is submitted, polled in the envelope, and fetched without 
   expect(submit.auth).toBe('Bearer lux');
   expect(JSON.parse(submit.body)).toMatchObject({ model: 'doubao-seedance-2-0-260128', duration: 5 });
   expect(seen.find((s) => s.path === '/cdn/clip.mp4').auth).toBe('');
+});
+
+test('an unavailable Seedance 2.5 draft falls back to a regular edit preview', async () => {
+  seen.length = 0;
+  let submits = 0;
+  script = {
+    'POST /api/v3/contents/generations/tasks': () => ++submits === 1
+      ? { code: 'supply_unavailable', message: 'The model service is temporarily unavailable.' }
+      : { id: 'preview-1', status: 'queued' },
+    'GET /api/v3/contents/generations/tasks/preview-1': { id: 'preview-1', status: 'succeeded', content: { video_url: `${origin}/cdn/preview.mp4` } },
+    'GET /cdn/preview.mp4': Buffer.from('preview-bytes')
+  };
+  const result = await generateOpenLuxVideo({
+    apiKey: 'lux', adapter: 'seedance', sleep: noWait,
+    params: { model: 'doubao-seedance-2-5-260628', prompt: 'Edit the clip', resolution: '480p', draft: true,
+      videoRefs: [{ url: 'https://example.com/guide.mp4' }] }
+  });
+  expect(result).toMatchObject({ generationId: 'preview-1', draft: false, draftFallback: true });
+  expect(submits).toBe(2);
+  const requests = seen.filter((entry) => entry.method === 'POST').map((entry) => JSON.parse(entry.body));
+  expect(requests[0]).toMatchObject({ draft: true, omni_reference_task_type: 'edit', duration: -1 });
+  expect(requests[1].draft).toBeUndefined();
+  expect(requests[1].content).toEqual(requests[0].content);
+});
+
+test('a transient poll failure keeps the OpenLux task and recovers without resubmitting', async () => {
+  seen.length = 0;
+  let polls = 0;
+  script = {
+    'POST /api/v3/contents/generations/tasks': { id: 'kept-task', status: 'queued' },
+    'GET /api/v3/contents/generations/tasks/kept-task': () => ++polls === 1
+      ? { httpStatus: 503, body: { error: { message: 'Temporary gateway error' } } }
+      : { id: 'kept-task', status: 'succeeded', content: { video_url: `${origin}/cdn/recovered.mp4` } },
+    'GET /cdn/recovered.mp4': Buffer.from('recovered-video')
+  };
+  const phases = [];
+  const result = await generateOpenLuxVideo({
+    apiKey: 'lux', adapter: 'seedance', sleep: noWait,
+    params: { model: 'doubao-seedance-2-5-260628', prompt: 'p', duration: 4 },
+    onProgress: (progress) => phases.push(progress)
+  });
+  expect(result.generationId).toBe('kept-task');
+  expect(result.buf.toString()).toBe('recovered-video');
+  expect(seen.filter((entry) => entry.method === 'POST')).toHaveLength(1);
+  expect(phases.find((entry) => entry.phase === 'reconnecting').jobId).toBe('kept-task');
+});
+
+test('an existing OpenLux task is resumed without a second generation request', async () => {
+  seen.length = 0;
+  script = {
+    'GET /api/v3/contents/generations/tasks/existing-task': {
+      id: 'existing-task', model: 'doubao-seedance-2-5-260628', resolution: '1080p',
+      status: 'succeeded', content: { video_url: `${origin}/cdn/existing.mp4` }
+    },
+    'GET /cdn/existing.mp4': Buffer.from('existing-video')
+  };
+  const result = await generateOpenLuxVideo({
+    apiKey: 'lux', adapter: 'seedance', sleep: noWait,
+    params: { model: 'doubao-seedance-2-5-260628', prompt: 'p', resolution: '1080p', resumeTaskId: 'existing-task' }
+  });
+  expect(result.generationId).toBe('existing-task');
+  expect(result.buf.toString()).toBe('existing-video');
+  expect(seen.filter((entry) => entry.method === 'POST')).toHaveLength(0);
 });
 
 test('an OpenAI-format job with no URL is downloaded from /content with the key', async () => {

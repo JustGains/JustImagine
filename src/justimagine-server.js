@@ -5,7 +5,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { pipeline } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { AUDIO_ENHANCE_KINDS, ENHANCE_MODEL, enhancePrompt, generateImage, generateVideo, transcribeWords, VIDEO_KEY_API, writeStoryboard } from './justimagine-gen.js';
+import { APP_BY_ID, APPS, chooseImageAppModel, chooseVideoAppModel, imageAppLabel, imageAppPrompt, videoAppPrompt } from './apps-workflows.js';
+import { generateVector, hasFfmpeg, probeMedia, processAppMedia, restoreSceneAudio, silentSceneReference } from './apps-processing.js';
+import { demoClipPath, demoClipVersion, ensureDemoClip } from './scene-remix-demo.js';
+import { cleanupS3References, readS3Settings, removeS3Settings, s3SettingsStatus, saveS3Settings, uploadS3Reference } from './scene-remix-s3.js';
+import { AUDIO_ENHANCE_KINDS, ENHANCE_MODEL, describeSceneBackground, enhancePrompt, generateImage, generateVideo, transcribeWords, VIDEO_KEY_API, writeStoryboard } from './justimagine-gen.js';
 import { musicVideoSpec, buildMusicVideoPrompt } from './music-video.js';
 import { isLipSyncModel, sniffMedia, uploadMeta } from './music-video-plan.js';
 export { sniffMedia } from './music-video-plan.js';
@@ -99,6 +103,17 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const UI_HTML = path.join(__dirname, 'justimagine.html');
+export const APPS_HTML = path.join(__dirname, 'apps.html');
+export const SCENE_REMIX_HTML = path.join(__dirname, 'scene-remix.html');
+// The shared Just Superhuman kit, synced in from the suite; never edited here.
+export const KIT_DIR = path.join(__dirname, 'superhuman');
+const KIT_TYPES = {
+  css: 'text/css; charset=utf-8',
+  js: 'text/javascript; charset=utf-8',
+  svg: 'image/svg+xml',
+  woff2: 'font/woff2',
+  txt: 'text/plain; charset=utf-8'
+};
 export const ASSETS_DIR = path.join(__dirname, 'assets');
 // Modules the studio page loads, shared with the hosted studio, which serves
 // them at the same paths.
@@ -106,7 +121,14 @@ export const PAGE_MODULES = {
   '/assets/music-video.js': 'music-video.js',
   '/assets/music-video-plan.js': 'music-video-plan.js',
   '/assets/music-video-maker.js': 'music-video-maker.js',
-  '/assets/vendor/mediabunny.js': 'vendor/mediabunny.js'
+  '/assets/vendor/mediabunny.js': 'vendor/mediabunny.js',
+  '/assets/apps.js': 'apps.js',
+  '/assets/apps-workflows.js': 'apps-workflows.js',
+  '/assets/scene-remix.js': 'scene-remix.js',
+  '/assets/scene-remix-editor.js': 'scene-remix-editor.js',
+  '/assets/scene-remix-depth.js': 'scene-remix-depth.js',
+  '/assets/scene-remix-layers.js': 'scene-remix-layers.js',
+  '/assets/scene-remix-cache.js': 'scene-remix-cache.js'
 };
 
 // How many upstream calls may be in flight at once, per kind; the rest wait in
@@ -123,6 +145,12 @@ export const LIMIT_MAX = { image: 128, video: 48, song: 32, voice: 32 };
 // four takes of one is plenty to choose between.
 export const COUNT_MAX = { image: 12, video: 4, song: 4, voice: 4 };
 export const MEDIA_KINDS = Object.keys(LIMITS);
+const SCENE_REMIX_MAX_SECONDS = 30;
+const SCENE_REMIX_MODELS = new Set(['bytedance/seedance-2.0-mini', 'bytedance/seedance-2.0', 'bytedance/seedance-2.5']);
+const SCENE_REMIX_UNAVAILABLE = new Set(['bytedance/seedance-2.5']);
+const SCENE_REMIX_OPENLUX_MODEL = 'doubao-seedance-2-5-260628';
+// OpenLux currently rejects content.draft_task even though the upstream model supports it.
+const SCENE_REMIX_OPENLUX_DRAFT_FINISH = false;
 
 // A configured cap, made safe: whole numbers from 1 to the ceiling, anything
 // missing or nonsensical falling back to the default.
@@ -443,6 +471,17 @@ export function audioRelayFromEnv(env = process.env) {
   };
 }
 
+export function videoRelayFromEnv(env = process.env) {
+  const endpoint = env.JUSTIMAGINE_VIDEO_RELAY;
+  if (!endpoint) return null;
+  return async (file, signal) => {
+    const res = await fetch(endpoint, { method: 'POST', signal, headers: { 'content-type': 'video/mp4' }, body: fs.createReadStream(file), duplex: 'half' });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !/^https:\/\//.test(json.url || '')) throw new Error(json.error || 'The video relay did not return a public link.');
+    return json.url;
+  };
+}
+
 
 // Enough of a key to tell which one is saved, and never enough to use. Short
 // strings give up nothing at all rather than most of themselves.
@@ -477,7 +516,7 @@ function sendJson(res, code, obj) {
 
 // Generated files never change under their name, so they can be cached hard.
 // Range support is what lets a <video> seek instead of refetching the clip.
-function sendFile(req, res, full, type, { immutable = true } = {}) {
+function sendFile(req, res, full, type, { immutable = true, cacheControl = '' } = {}) {
   let stat;
   try {
     stat = fs.statSync(full);
@@ -488,9 +527,11 @@ function sendFile(req, res, full, type, { immutable = true } = {}) {
   }
   const headers = {
     'content-type': type || 'application/octet-stream',
+    'x-content-type-options': 'nosniff',
+    ...(type === 'image/svg+xml' ? { 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox" } : {}),
     'accept-ranges': 'bytes',
     'last-modified': stat.mtime.toUTCString(),
-    'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache'
+    'cache-control': cacheControl || (immutable ? 'public, max-age=31536000, immutable' : 'no-cache')
   };
   const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
   if (range && stat.size) {
@@ -595,6 +636,7 @@ export function createJobs({ limits = LIMITS, retainMs = JOB_RETAIN_MS, retainMa
     characterId: j.characterId,
     status: j.status,
     phase: j.phase,
+    providerTaskId: j.providerTaskId,
     refs: j.refs,
     startedAt: j.startedAt,
     queuedAt: j.queuedAt,
@@ -667,7 +709,7 @@ export function createJobs({ limits = LIMITS, retainMs = JOB_RETAIN_MS, retainMa
   }
 
   return {
-    add({ kind, folder, prompt, model, refs, characters, characterId, batch, run, onCancel }) {
+    add({ kind, folder, prompt, model, refs, characters, characterId, batch, run, onCancel, by }) {
       const id = `${Date.now().toString(36)}-${(seq++).toString(36)}-${crypto.randomBytes(2).toString('hex')}`;
       const job = {
         id,
@@ -681,6 +723,7 @@ export function createJobs({ limits = LIMITS, retainMs = JOB_RETAIN_MS, retainMa
         batch,
         run,
         onCancel,
+        by,
         status: 'queued',
         phase: 'queued',
         queuedAt: Date.now(),
@@ -693,9 +736,9 @@ export function createJobs({ limits = LIMITS, retainMs = JOB_RETAIN_MS, retainMa
       pump(kind);
       return id;
     },
-    progress(id, phase) {
+    progress(id, phase, providerTaskId) {
       const job = jobs.get(id);
-      if (job && job.status === 'running') update(job, { phase });
+      if (job && job.status === 'running') update(job, { phase, ...(providerTaskId ? { providerTaskId } : {}) });
     },
     signal: (id) => jobs.get(id)?.ctrl.signal,
     cancel: cancelOne,
@@ -825,8 +868,15 @@ export function createServer({
   allowLocalPaths = true,
   suiteNavigation = false,
   preferenceScope = '',
+  // A host that signs people in (TekPrepperAI) passes `permit(permission)`,
+  // asked on every request so a role change applies at once, and `actor()`,
+  // the person making the request, recorded as `by` on everything they make.
+  // Without them (a local install) everything is allowed and nothing is stamped.
+  permit = null,
+  actor = null,
   // How a piece of song reaches OpenRouter for lip sync; see audioRelayFromEnv.
-  audioRelay = audioRelayFromEnv()
+  audioRelay = audioRelayFromEnv(),
+  videoRelay = videoRelayFromEnv()
 }) {
   ensureRoot(root);
   ensureLibrary(charactersRoot);
@@ -845,6 +895,32 @@ export function createServer({
   // A typed-in video id goes to OpenRouter, so its key alone is enough.
   const videoReady = () => !!keyOf(VIDEO_KEY_API) || videoModels.some((m) => !!keyOf(videoApiOf(m)));
   const authGuard = auth === false ? null : auth;
+
+  // ---------- who may do what ----------
+  const actorOf = () => (actor ? actor() || undefined : undefined);
+  // Marks the entry itself, so the job's result and the gallery history agree.
+  const stamp = (entry, by) => { if (by) entry.by = by; return entry; };
+  const NEEDS = {
+    images: 'generate images', video: 'generate video', audio: 'make songs or voices', cast: 'change the cast',
+    organize: 'organize the gallery', keys: 'change provider keys or settings'
+  };
+  const can = (permission) => !permit || !!permit(permission);
+  const need = (permission) => {
+    if (!can(permission)) throw Object.assign(new Error(`Your roles do not allow you to ${NEEDS[permission]} in JustImagine. Ask an administrator.`), { status: 403 });
+  };
+  // What each kind of generation needs. The prompt writer serves every kind.
+  const KIND_NEEDS = { image: 'images', video: 'video', 'music-video': 'video', song: 'audio', voice: 'audio', 'voice-design': 'audio', 'character-refs': 'cast' };
+  const ROUTE_NEEDS = {
+    'POST /api/settings': 'keys', 'POST /api/config/key': 'keys',
+    'POST /api/apps/scene-remix/storage': 'keys', 'POST /api/apps/scene-remix/storage/remove': 'keys',
+    'POST /api/folder': 'organize', 'POST /api/folder/rename': 'organize', 'POST /api/folder/delete': 'organize',
+    'POST /api/move': 'organize', 'POST /api/delete': 'organize',
+    'POST /api/characters': 'cast', 'POST /api/characters/update': 'cast', 'POST /api/characters/import': 'cast',
+    'POST /api/characters/delete': 'cast', 'POST /api/characters/refs': 'cast', 'POST /api/characters/refs/generate': 'cast',
+    'POST /api/characters/refs/keep': 'cast', 'POST /api/characters/candidates/clear': 'cast', 'POST /api/characters/refs/delete': 'cast',
+    'POST /api/voices/design': 'audio', 'POST /api/voices/save': 'audio', 'POST /api/voices/clone': 'audio', 'POST /api/voices/say': 'audio',
+    'POST /api/apps/scene-remix': 'video'
+  };
 
   // `prompt` is what the user typed and what gets recorded; `composed` is that
   // plus the character block, and is what the model actually sees.
@@ -886,11 +962,11 @@ export function createServer({
       ms: Date.now() - started,
       ts: Date.now()
     };
-    appendHistory(folderFull, entry);
+    appendHistory(folderFull, stamp(entry, job?.by));
     return entry;
   }
 
-  async function runVideoJob(job, { prompt, composed, model, videoApi = VIDEO_KEY_API, adapter, params, refs, castNames, folderFull, folderRel, batch, musicVideo }) {
+  async function runVideoJob(job, { prompt, composed, model, videoApi = VIDEO_KEY_API, adapter, params, refs, castNames, folderFull, folderRel, batch, musicVideo, sceneSource }) {
     const apiKey = keyOf(videoApi);
     if (!apiKey) {
       throw new Error(`Video generation with ${model} needs ${apiLabel(videoApi)} key. Add it in Settings.`);
@@ -909,19 +985,38 @@ export function createServer({
       apiKey,
       params: { model, prompt: composed || prompt, ...upstream },
       signal: job.ctrl.signal,
-      onProgress: (p) => jobs.progress(job.id, p.phase)
+      onProgress: (p) => jobs.progress(job.id, p.phase, p.jobId)
     };
     // OpenRouter has one video API; OpenLux keeps each upstream's own, so its
     // models carry the adapter that knows their route.
     const run = adapter ? generateOpenLuxVideo({ ...request, adapter }) : generateVideo(request);
-    const { buf, ext, cost, generationId } = await run.catch((e) => {
+    const { buf, ext, cost, generationId, draft: providerDraft, draftFallback } = await run.catch((e) => {
       throw new Error(explainRefFailure(e.message, sent));
     });
-    const file = outputName(prompt, ext);
     fs.mkdirSync(folderFull, { recursive: true });
-    fs.writeFileSync(path.join(folderFull, file), buf);
+    const file = outputName(prompt, sceneSource ? 'mp4' : ext);
+    let savedFile = file;
+    let restoredAudio = false;
+    let restoreError = '';
+    if (sceneSource) {
+      const rawFile = outputName(`${prompt}-model-output`, ext);
+      const raw = path.join(folderFull, rawFile);
+      try {
+        fs.writeFileSync(raw, buf);
+        jobs.progress(job.id, 'restoring original audio');
+        await restoreSceneAudio({ generated: raw, source: sceneSource, output: path.join(folderFull, file), signal: job.ctrl.signal });
+        restoredAudio = true;
+        fs.rmSync(raw, { force: true });
+      } catch (error) {
+        if (job.ctrl.signal.aborted) throw error;
+        savedFile = rawFile;
+        restoreError = error.message;
+      }
+    } else {
+      fs.writeFileSync(path.join(folderFull, file), buf);
+    }
     const entry = {
-      file,
+      file: savedFile,
       kind: 'video',
       ...(musicVideo || {}),
       folder: folderRel,
@@ -936,16 +1031,19 @@ export function createServer({
       audio: params.generateAudio || undefined,
       seed: params.seed || undefined,
       audioRef: params.audioRefs?.[0]?.file,
+      ...(sceneSource ? { workflow: 'scene-remix', originalAudio: restoredAudio, ...(restoreError ? { restoreError } : {}) } : {}),
       images: refs.length ? refs.map((r) => r.file) : undefined,
       refs: refs.length || undefined,
       batch,
       cost,
       generationId,
-      bytes: buf.length,
+      ...(sceneSource && providerDraft ? { draft: true } : {}),
+      ...(sceneSource && draftFallback ? { draftFallback: true } : {}),
+      bytes: fs.statSync(path.join(folderFull, savedFile)).size,
       ms: Date.now() - started,
       ts: Date.now()
     };
-    appendHistory(folderFull, entry);
+    appendHistory(folderFull, stamp(entry, job?.by));
     return entry;
   }
 
@@ -997,7 +1095,7 @@ export function createServer({
       ms: Date.now() - started,
       ts: Date.now()
     };
-    appendHistory(folderFull, entry);
+    appendHistory(folderFull, stamp(entry, job?.by));
     return entry;
   }
 
@@ -1053,7 +1151,7 @@ export function createServer({
       ms: Date.now() - started,
       ts: Date.now()
     };
-    appendHistory(folderFull, entry);
+    appendHistory(folderFull, stamp(entry, job?.by));
     return entry;
   }
 
@@ -1306,6 +1404,29 @@ export function createServer({
       if (videoApi !== VIDEO_KEY_API && !modelSpec?.adapter) {
         throw Object.assign(new Error(`${apiById.get(videoApi)?.name || videoApi} has no video route for "${model}".`), { status: 400 });
       }
+      const videoRef = spec.videoRef ? String(spec.videoRef).trim() : '';
+      const draftTaskId = spec.draftTaskId ? String(spec.draftTaskId).trim() : '';
+      const resumeTaskId = spec.resumeTaskId ? String(spec.resumeTaskId).trim() : '';
+      if (resumeTaskId && (videoApi !== 'openlux' || model !== SCENE_REMIX_OPENLUX_MODEL || !/^[A-Za-z0-9_.:-]{1,200}$/.test(resumeTaskId))) {
+        throw badRequest('Choose an OpenLux Seedance 2.5 task to resume.');
+      }
+      if (draftTaskId && !SCENE_REMIX_OPENLUX_DRAFT_FINISH) {
+        throw badRequest('OpenLux cannot finish a Seedance 2.5 draft by task ID yet. Start a new final from the prepared guide.');
+      }
+      if (draftTaskId && (videoApi !== 'openlux' || model !== SCENE_REMIX_OPENLUX_MODEL || !/^[A-Za-z0-9_.:-]{1,200}$/.test(draftTaskId))) {
+        throw badRequest('Choose a Seedance 2.5 draft made with OpenLux.');
+      }
+      if (videoRef) {
+        let parsed;
+        try { parsed = new URL(videoRef); } catch { throw badRequest('Add a public HTTPS link to the prepared MP4.'); }
+        const supported = (videoApi === VIDEO_KEY_API && /^bytedance\/seedance-2\./.test(model))
+          || (videoApi === 'openlux' && model === SCENE_REMIX_OPENLUX_MODEL);
+        if (parsed.protocol !== 'https:' || parsed.username || parsed.password || !supported || draftTaskId || resumeTaskId) {
+          throw badRequest('Video editing needs a public HTTPS MP4 link and a supported Seedance model.');
+        }
+      }
+      const sceneSource = spec.sceneSource ? appInput(spec.sceneSource, 'video').file : null;
+      if (sceneSource && ((!videoRef && !draftTaskId && !resumeTaskId) || !hasFfmpeg())) throw badRequest('Video Remix needs the prepared clip and FFmpeg to restore its audio.');
       const params = {
         duration: musicVideo?.duration || (spec.duration ? Number(spec.duration) : undefined),
         resolution: spec.resolution,
@@ -1313,7 +1434,11 @@ export function createServer({
         size: spec.size,
         generateAudio: musicVideo || audioRef ? true : typeof spec.audio === 'boolean' ? spec.audio : undefined,
         seed: spec.seed,
+        ...(spec.draft === true ? { draft: true } : {}),
+        ...(draftTaskId ? { draftTaskId } : {}),
+        ...(resumeTaskId ? { resumeTaskId } : {}),
         ...(audioRef ? { audioRefs: [audioRef] } : {}),
+        ...(videoRef ? { videoRefs: [{ url: videoRef }] } : {}),
         ...frameSelection({
           refs,
           characterRefs,
@@ -1322,7 +1447,7 @@ export function createServer({
           lastFrame: spec.lastFrame === true
         })
       };
-      return { ...common, ...(musicVideo ? { composed: buildMusicVideoPrompt(common.composed, musicVideo), musicVideo } : {}), model, videoApi, adapter: modelSpec?.adapter, params, refs };
+      return { ...common, ...(musicVideo ? { composed: buildMusicVideoPrompt(common.composed, musicVideo), musicVideo } : {}), model, videoApi, adapter: modelSpec?.adapter, params, refs, sceneSource };
     }
 
     const api = apiById.get(spec.api) || apiById.get(defaultApi) || apis[0];
@@ -1517,6 +1642,7 @@ export function createServer({
     for (let i = 0; i < count; i++) {
       ids.push(
         jobs.add({
+          by: actorOf(),
           kind,
           folder: folderRel,
           prompt,
@@ -1534,7 +1660,7 @@ export function createServer({
               : kind === 'voice'
               ? runVoiceJob(job, { ...plan, batch })
               : kind === 'video'
-              ? runVideoJob(job, { prompt, composed, model, videoApi: plan.videoApi, adapter: plan.adapter, params: plan.params, refs, castNames, folderFull, folderRel, batch, musicVideo: plan.musicVideo })
+              ? runVideoJob(job, { prompt, composed, model, videoApi: plan.videoApi, adapter: plan.adapter, params: plan.params, refs, castNames, folderFull, folderRel, batch, musicVideo: plan.musicVideo, sceneSource: plan.sceneSource })
               : runImageJob(job, {
                   prompt,
                   composed,
@@ -1582,6 +1708,8 @@ export function createServer({
   // Files on their way in through /api/media, kept outside the gallery (and
   // so outside anything a host syncs) until the last piece arrives.
   const uploads = new Map();
+  const appInputs = new Map();
+  const silentReferences = new Map();
   const UPLOAD_DIR = path.join(os.tmpdir(), 'justimagine-uploads');
   const UPLOAD_MAX = 2 * 1024 ** 3;
   const sweepUploads = () => {
@@ -1590,13 +1718,108 @@ export function createServer({
       fs.rm(up.file, { force: true }, () => {});
       uploads.delete(id);
     }
+    for (const [id, input] of appInputs) {
+      if (Date.now() - input.touched < 3600_000) continue;
+      fs.rm(input.file, { force: true }, () => {});
+      if (input.silentFile) fs.rm(input.silentFile, { force: true }, () => {});
+      appInputs.delete(id);
+    }
+    // A restart loses the in-memory upload map. Old temporary inputs are safe
+    // to prune on the next start; live uploads from another instance stay put.
+    try {
+      for (const name of fs.readdirSync(UPLOAD_DIR)) {
+        if (!/^[a-f0-9]{24}(?:\.part|\.silent\.mp4)$/.test(name)) continue;
+        const file = path.join(UPLOAD_DIR, name);
+        if (Date.now() - fs.statSync(file).mtimeMs > 3600_000) fs.rmSync(file, { force: true });
+      }
+    } catch { /* no upload folder yet */ }
   };
+  sweepUploads();
+
+  function appInput(id, kind) {
+    const input = appInputs.get(String(id || ''));
+    if (!input || (kind === 'image' && !input.type.startsWith('image/')) || (kind === 'video' && !input.type.startsWith('video/'))) {
+      throw Object.assign(new Error(`Upload ${kind === 'video' ? 'a video' : 'an image'} first.`), { status: 400 });
+    }
+    input.touched = Date.now();
+    return input;
+  }
+
+  async function silentReference(id, input) {
+    const key = String(id || '');
+    if (!/^[a-f0-9]{24}$/.test(key)) throw badRequest('Upload a prepared clip first.');
+    const file = path.join(UPLOAD_DIR, `${key}.silent.mp4`);
+    if (fs.existsSync(file) && fs.statSync(file).size > 1000) {
+      input.silentFile = file;
+      return file;
+    }
+    if (!silentReferences.has(key)) {
+      silentReferences.set(key, silentSceneReference({ source: input.file, output: file })
+        .then(() => { input.silentFile = file; return file; })
+        .finally(() => silentReferences.delete(key)));
+    }
+    return silentReferences.get(key);
+  }
+
+  function appImageRef(id) {
+    const input = appInput(id, 'image');
+    if (fs.statSync(input.file).size > 32 * 1024 * 1024) throw Object.assign(new Error('Use an image under 32 MB.'), { status: 400 });
+    return saveContext(root, `data:${input.type};base64,${fs.readFileSync(input.file).toString('base64')}`).file;
+  }
+
+  function queueLocalApp(app, input, values, folderFull, folderRel) {
+    need(app.id === 'upscaler' ? 'images' : 'video');
+    const ext = app.id === 'upscaler' ? 'png' : 'mp4';
+    const prompt = app.id === 'video-trim' ? `Trim ${input.name}` : app.id === 'upscaler' ? `Upscale ${input.name}` : `Clean audio in ${input.name}`;
+    const model = app.id === 'upscaler' ? 'Lanczos' : 'FFmpeg';
+    const id = jobs.add({
+          by: actorOf(),
+      kind: app.id === 'upscaler' ? 'image' : 'video', folder: folderRel, prompt, model,
+      run: async (job) => {
+        const started = Date.now();
+        jobs.progress(job.id, 'processing');
+        fs.mkdirSync(folderFull, { recursive: true });
+        const file = outputName(prompt, ext);
+        const dest = path.join(folderFull, file);
+        await processAppMedia({ app: app.id, input: input.file, output: dest, values, signal: job.ctrl.signal });
+        const entry = { file, folder: folderRel, kind: app.id === 'upscaler' ? 'image' : 'video', prompt, model, app: app.id, bytes: fs.statSync(dest).size, ms: Date.now() - started, ts: Date.now() };
+        appendHistory(folderFull, stamp(entry, job?.by));
+        return entry;
+      }
+    });
+    return { jobs: [id], kind: app.id === 'upscaler' ? 'image' : 'video', folder: folderRel, model };
+  }
+
+  function queueVectorApp(prompt, folderFull, folderRel) {
+    need('images');
+    const api = apiById.get(enhanceApi);
+    const apiKey = keyOf(enhanceApi);
+    if (generationPolicy) throw Object.assign(new Error('Vectorize needs an own-key text model in this host.'), { status: 400 });
+    if (!apiKey || !api?.chatUrl) throw Object.assign(new Error('Vectorize needs an OpenRouter text-model key. Add it in Settings.'), { status: 400 });
+    const id = jobs.add({
+          by: actorOf(),
+      kind: 'image', folder: folderRel, prompt, model: enhanceModel,
+      run: async (job) => {
+        const started = Date.now();
+        jobs.progress(job.id, 'drawing');
+        const svg = await generateVector({ apiKey, chatUrl: api.chatUrl, model: enhanceModel, prompt, signal: job.ctrl.signal });
+        fs.mkdirSync(folderFull, { recursive: true });
+        const file = outputName(prompt, 'svg');
+        fs.writeFileSync(path.join(folderFull, file), svg);
+        const entry = { file, folder: folderRel, kind: 'image', prompt, model: enhanceModel, api: enhanceApi, app: 'vectorize', bytes: Buffer.byteLength(svg), ms: Date.now() - started, ts: Date.now() };
+        appendHistory(folderFull, stamp(entry, job?.by));
+        return entry;
+      }
+    });
+    return { jobs: [id], kind: 'image', folder: folderRel, model: enhanceModel };
+  }
 
   const executeReserved = (reservation, work, job) => generationPolicy
     ? generationPolicy.execute(reservation, work, job)
     : work();
 
   function queuePlans(plans) {
+    for (const plan of plans) need(KIND_NEEDS[plan.kind] || 'images');
     const reservations = generationPolicy?.reserve(plans.flatMap(plan =>
       Array.from({ length: plan.count }, () => ({ ...plan, count: 1 }))
     )) || [];
@@ -1640,6 +1863,147 @@ export function createServer({
   }
 
   const routes = {
+    'GET /api/apps'() {
+      const image = chooseImageAppModel(apis, (id) => !!keyOf(id));
+      const video = chooseVideoAppModel(videoModels, (id) => !!keyOf(id));
+      const remixModels = [...SCENE_REMIX_MODELS, SCENE_REMIX_OPENLUX_MODEL]
+        .map((id) => videoModels.find((m) => m.id === id && videoApiOf(m) === (id === SCENE_REMIX_OPENLUX_MODEL ? 'openlux' : VIDEO_KEY_API) && !!keyOf(videoApiOf(m))))
+        .filter(Boolean);
+      const editReady = (model) => !SCENE_REMIX_UNAVAILABLE.has(model.id);
+      return {
+        apps: APPS,
+        recommendedImage: image ? { api: image.api.id, model: image.model.id, name: image.model.name || image.model.id } : null,
+        recommendedVideo: video ? { api: video.api || VIDEO_KEY_API, model: video.id, name: video.name || video.id } : null,
+        ffmpeg: hasFfmpeg(),
+        localReady: !generationPolicy && hasFfmpeg(),
+        vectorReady: !generationPolicy && !!keyOf(enhanceApi) && !!apiById.get(enhanceApi)?.chatUrl,
+        vectorModel: enhanceModel,
+        sceneRemix: {
+          ready: hasFfmpeg() && remixModels.some(editReady),
+          canShare: !!videoRelay || !!readS3Settings(configPath),
+          maxSeconds: Math.min(SCENE_REMIX_MAX_SECONDS, Math.max(4, ...remixModels.filter(editReady).flatMap((m) => m.durations || []))),
+          models: remixModels.map((m) => ({ id: m.id, api: videoApiOf(m), name: m.id === SCENE_REMIX_OPENLUX_MODEL ? 'Seedance 2.5 · OpenLux' : m.name,
+            durations: m.durations, resolutions: m.resolutions, aspectRatios: m.aspectRatios, editReady: editReady(m),
+            draftFinishReady: m.id === SCENE_REMIX_OPENLUX_MODEL && SCENE_REMIX_OPENLUX_DRAFT_FINISH }))
+        }
+      };
+    },
+
+    async 'POST /api/apps/scene-remix/demo'(req) {
+      const body = await readJsonBody(req);
+      const fictional = body.clip === 'fictional';
+      const file = fictional ? path.join(__dirname, 'assets', 'demo', 'fictional-studio.mp4') : await ensureDemoClip(root);
+      const version = demoClipVersion(file);
+      return { video: `/assets/demo/${fictional ? 'fictional-studio' : 'hotel-lobby'}.mp4?v=${version}`, version,
+        faces: ['/assets/demo/left-face-illustrated.png', '/assets/demo/right-face-illustrated.png'] };
+    },
+
+    'GET /api/apps/scene-remix/storage'() {
+      return s3SettingsStatus(configPath, !!configPath && !!saveKey);
+    },
+
+    async 'POST /api/apps/scene-remix/storage'(req) {
+      if (!configPath || !saveKey) throw badRequest('This gallery cannot save S3 settings.');
+      const body = await readJsonBody(req, 16 * 1024);
+      return saveS3Settings(configPath, body);
+    },
+
+    async 'POST /api/apps/scene-remix/storage/remove'() {
+      if (!configPath || !saveKey) throw badRequest('This gallery cannot save S3 settings.');
+      return removeS3Settings(configPath);
+    },
+
+    async 'POST /api/apps/scene-remix/share'(req) {
+      if (!videoRelay && !readS3Settings(configPath)) throw badRequest('Set up S3 hosting or provide a public HTTPS link to the silent model reference.');
+      const { source } = await readJsonBody(req, 1024);
+      const input = appInput(source, 'video');
+      const file = await silentReference(source, input);
+      if (readS3Settings(configPath)) return uploadS3Reference(configPath, file);
+      return { url: await videoRelay(file) };
+    },
+
+    async 'POST /api/apps/scene-remix'(req) {
+      const body = await readJsonBody(req, 256 * 1024);
+      if (body.reviewed !== true) throw badRequest('Watch and approve the prepared clip before generating.');
+      const source = appInput(body.source, 'video');
+      const info = await probeMedia(source.file);
+      const seconds = Number(info.format?.duration);
+      if (!info.streams?.some((stream) => stream.codec_type === 'audio')) throw badRequest('Prepare a clip with its original audio track.');
+      if (!Number.isFinite(seconds) || seconds < 3.8 || seconds > SCENE_REMIX_MAX_SECONDS + 0.2) throw badRequest(`Prepare a clip between 4 and ${SCENE_REMIX_MAX_SECONDS} seconds.`);
+      const duration = Math.round(seconds);
+      if (Math.abs(duration - seconds) > 0.2) throw badRequest('The prepared clip should end on a whole second. Prepare it again.');
+      const model = videoModels.find((m) => m.id === body.model && (
+        (videoApiOf(m) === VIDEO_KEY_API && SCENE_REMIX_MODELS.has(m.id))
+        || (videoApiOf(m) === 'openlux' && m.id === SCENE_REMIX_OPENLUX_MODEL)));
+      if (!model || !keyOf(videoApiOf(model))) throw badRequest('Choose a connected Seedance model for Video Remix.');
+      if (SCENE_REMIX_UNAVAILABLE.has(model.id)) throw badRequest('Seedance 2.5 video edits are unavailable through OpenRouter. Its edit endpoint requires a duration value that OpenRouter rejects. Choose Seedance 2.0 or 2.0 Mini.');
+      const resolution = String(body.resolution || '480p');
+      if (!model.durations?.includes(duration) || !model.resolutions?.includes(resolution)) throw badRequest('This model does not support that clip length or resolution.');
+      const draftTaskId = String(body.draftTaskId || '').trim();
+      const resumeTaskId = String(body.resumeTaskId || '').trim();
+      const draft = body.draft === true;
+      if (draftTaskId && !SCENE_REMIX_OPENLUX_DRAFT_FINISH) throw badRequest('OpenLux cannot finish a Seedance 2.5 draft by task ID yet. Start a new final from the prepared guide.');
+      if (draft && (model.id !== SCENE_REMIX_OPENLUX_MODEL || resolution !== '480p')) throw badRequest('Seedance 2.5 drafts use OpenLux at 480p.');
+      if (resumeTaskId && (model.id !== SCENE_REMIX_OPENLUX_MODEL || draft || draftTaskId)) throw badRequest('Only an OpenLux Seedance 2.5 task can be resumed here.');
+      if (draftTaskId && (model.id !== SCENE_REMIX_OPENLUX_MODEL || draft || resolution !== '1080p')) throw badRequest('Finish an OpenLux Seedance 2.5 draft at 1080p.');
+      const images = draftTaskId || resumeTaskId ? [] : [appImageRef(body.character), ...(body.character2 ? [appImageRef(body.character2)] : [])];
+      const mode = ['face-mesh', 'person-mask', 'combined', 'depth-only'].includes(body.mode) ? body.mode : 'person-mask';
+      const instruction = String(body.instruction || '').trim().slice(0, 1200);
+      const scene = String(body.scene || '').trim().replace(/[.!?]+$/, '').slice(0, 600);
+      const backgroundColor = /^#[0-9a-f]{6}$/i.test(body.backgroundColor || '') ? body.backgroundColor : '';
+      const guide = `${mode === 'depth-only'
+        ? 'The supplied video is a grayscale depth map. Rebuild the setting in natural color.'
+        : 'The supplied video keeps the original setting in color, with the people shown as grayscale depth shapes. Keep the visible background and replace the depth shapes with the new characters.'}
+        Bright areas are nearer the camera; dark areas are farther away. Use the guide for motion, pose, shot changes, and camera timing. No depth shading or guide lines should appear in the result.${mode === 'face-mesh' || mode === 'combined' ? ' Face lines indicate expression and mouth motion only.' : ''}`.replace(/\s+/g, ' ');
+      const subject = images.length === 2
+        ? 'Replace the left person with the first image reference and the right person with the second image reference. Keep each person in their original position throughout.'
+        : 'Replace the prominent subject with the character in the image reference.';
+      const prompt = `Edit the supplied video reference. ${subject} ${guide}${backgroundColor && !scene ? ` The source backdrop's approximate color is ${backgroundColor}.` : ''}${scene ? ` Recreate this setting: ${scene}.` : ''} Keep the source action, camera moves, cuts, timing, and composition. Keep the same people in their assigned roles across every cut. Deliver one finished clip with no captions or split screen.${instruction ? ` Requested changes: ${instruction}` : ''}`;
+      return queueGeneration({ kind: 'video', folder: 'Apps/Video Remix', prompt, images, firstFrame: false,
+        videoRef: draftTaskId || resumeTaskId ? undefined : body.videoRef, draftTaskId, resumeTaskId, draft, sceneSource: body.source, model: model.id, api: videoApiOf(model),
+        duration, resolution, aspectRatio: String(body.aspectRatio || '16:9'), audio: false, count: 1 });
+    },
+
+    async 'POST /api/apps/run'(req) {
+      const body = await readJsonBody(req, 256 * 1024);
+      const app = APP_BY_ID[body.app];
+      if (!app) throw Object.assign(new Error('Choose an app from the catalog.'), { status: 400 });
+      const values = body.values && typeof body.values === 'object' && !Array.isArray(body.values) ? body.values : {};
+      const { full: folderFull, rel: folderRel } = resolveFolder(root, `Apps/${app.title}`);
+      if (app.engine === 'image') {
+        const composed = imageAppPrompt(app.id, values);
+        const choice = chooseImageAppModel(apis, (id) => !!keyOf(id), { api: body.api, model: body.model });
+        if (!choice) throw Object.assign(new Error('Image edits need a provider key. Add one in Settings.'), { status: 400 });
+        const ref = appImageRef(body.input);
+        const plan = planGeneration({ kind: 'image', folder: folderRel, prompt: imageAppLabel(app.id, values), images: [ref], api: choice.api.id, model: choice.model.id, count: 1 });
+        plan.composed = composed;
+        return queuePlans([plan])[0];
+      }
+      if (app.engine === 'video') {
+        const prompt = videoAppPrompt(values);
+        const candidates = body.input ? videoModels.filter((model) => model.frames?.includes('first_frame')) : videoModels;
+        const choice = chooseVideoAppModel(candidates, (id) => !!keyOf(id), { api: body.api, model: body.model });
+        if (!choice) throw Object.assign(new Error(body.input ? 'Add a key for a video model that accepts an opening image, or remove the image.' : 'Video generation needs a provider key. Add one in Settings.'), { status: 400 });
+        const images = body.input ? [appImageRef(body.input)] : [];
+        const wantedDuration = Number(values.duration);
+        const duration = choice.durations?.includes(wantedDuration) ? wantedDuration : choice.durations?.[0];
+        const ratio = choice.aspectRatios?.includes(values.ratio) ? values.ratio : undefined;
+        return queueGeneration({ kind: 'video', folder: folderRel, prompt, images, model: choice.id, api: choice.api || VIDEO_KEY_API, duration, aspectRatio: ratio, firstFrame: !!images.length, count: 1 });
+      }
+      if (app.engine === 'local-image' || app.engine === 'local-video') {
+        if (generationPolicy) throw Object.assign(new Error('Local processing is unavailable in this host.'), { status: 400 });
+        if (!hasFfmpeg()) throw Object.assign(new Error('FFmpeg is needed for this app. Install it and restart JustImagine.'), { status: 400 });
+        const input = appInput(body.input, app.engine === 'local-video' ? 'video' : 'image');
+        return queueLocalApp(app, input, values, folderFull, folderRel);
+      }
+      if (app.engine === 'vector') {
+        const prompt = String(values.prompt || '').trim().slice(0, 1200);
+        if (!prompt) throw Object.assign(new Error('Describe the vector illustration.'), { status: 400 });
+        return queueVectorApp(prompt, folderFull, folderRel);
+      }
+      throw Object.assign(new Error('This app is unavailable.'), { status: 400 });
+    },
+
     async 'GET /api/state'() {
       // Every model row carries display-ready facts (age, cost, speed,
       // quality); speed is this gallery's own record of how long the model
@@ -1649,6 +2013,8 @@ export function createServer({
         root: suiteNavigation ? '' : root,
         hosted: suiteNavigation,
         preferenceScope,
+        // What this person may do here (null: everything, a local install).
+        permissions: permit ? Object.keys(NEEDS).filter(can) : null,
         settings: readSettings(root),
         defaultApi,
         ...modelsPayload(),
@@ -1824,7 +2190,7 @@ export function createServer({
       fs.mkdirSync(UPLOAD_DIR, { recursive: true });
       const file = path.join(UPLOAD_DIR, `${id}.part`);
       fs.writeFileSync(file, '');
-      uploads.set(id, { file, folder: rel, name: String(body.name || '').slice(0, 200), size, received: 0, meta: uploadMeta(body.meta), kind: body.kind === 'voice' ? 'voice' : '', touched: Date.now() });
+      uploads.set(id, { file, folder: rel, name: String(body.name || '').slice(0, 200), size, received: 0, meta: uploadMeta(body.meta), kind: body.kind === 'voice' ? 'voice' : '', temporary: body.temporary === true, touched: Date.now() });
       return { id };
     },
     async 'POST /api/media/chunk'(req, res, url) {
@@ -1854,6 +2220,14 @@ export function createServer({
         fs.rmSync(up.file, { force: true });
         throw badRequest('That is not a picture, video or audio file this gallery can keep.');
       }
+      if (up.temporary) {
+        if (kind !== 'image' && kind !== 'video') {
+          fs.rmSync(up.file, { force: true });
+          throw badRequest('Apps take image or video files.');
+        }
+        appInputs.set(id, { file: up.file, type, name: up.name, touched: Date.now() });
+        return { input: { id, type, name: up.name } };
+      }
       const { full: folderFull, rel: folderRel } = resolveFolder(root, up.folder);
       fs.mkdirSync(folderFull, { recursive: true });
       const file = outputName(up.meta.title || up.meta.prompt || up.name.replace(/\.[a-z0-9]+$/i, '') || kind, EXT_BY_TYPE[type] || 'bin');
@@ -1864,7 +2238,7 @@ export function createServer({
         fs.copyFileSync(up.file, dest);
         fs.rmSync(up.file, { force: true });
       }
-      const entry = { file, kind, folder: folderRel, ...up.meta, prompt: up.meta.prompt || up.name || file, bytes: up.size, ts: Date.now() };
+      const entry = stamp({ file, kind, folder: folderRel, ...up.meta, prompt: up.meta.prompt || up.name || file, bytes: up.size, ts: Date.now() }, actorOf());
       appendHistory(folderFull, entry);
       return { item: entry };
     },
@@ -2027,6 +2401,20 @@ export function createServer({
           new Error(`Improving prompts needs ${apiLabel(enhanceApi)} key. Add it in Settings.`),
           { status: 400 }
         );
+      }
+      if (body.kind === 'scene-background') {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 45_000);
+        try {
+          const plan = { kind: 'enhance', model: enhanceModel, api: apiById.get(enhanceApi), count: 1 };
+          generationPolicy?.validate?.(plan);
+          const ticket = generationPolicy?.reserve([plan])?.[0];
+          return await executeReserved(ticket, () => describeSceneBackground({
+            apiKey, frames: body.frames, enhanceModel, chatUrl: apiById.get(enhanceApi)?.chatUrl, signal: ctrl.signal
+          }));
+        } finally {
+          clearTimeout(timer);
+        }
       }
       // A music video's shot list: one bigger call to the same writer.
       if (body.kind === 'storyboard') {
@@ -2313,6 +2701,7 @@ export function createServer({
       generationPolicy?.validate?.(plan);
       const ticket = generationPolicy?.reserve([plan])?.[0];
       const job = jobs.add({
+          by: actorOf(),
         kind: 'image',
         folder: '',
         prompt: `Reference shots for ${character.name}`,
@@ -2352,6 +2741,16 @@ export function createServer({
         res.end(JSON.stringify({ ok: true, title, service: 'justimagine' }));
         return;
       }
+      // The Just Superhuman design kit (styles, shell script, fonts, mark). It
+      // is the same public file set for everyone and the sign-in page needs it
+      // too, so it is served ahead of the token check.
+      if (method === 'GET' && url.pathname.startsWith('/superhuman/')) {
+        const rel = url.pathname.slice('/superhuman/'.length);
+        const type = /^[\w-]+(?:\/[\w-]+)*\.(css|js|svg|woff2|txt)$/.test(rel) && KIT_TYPES[rel.split('.').pop()];
+        if (!type) { res.writeHead(404); res.end('Not found'); return; }
+        sendFile(req, res, path.join(KIT_DIR, ...rel.split('/')), type, { cacheControl: 'public, max-age=3600' });
+        return;
+      }
 
       // Only the initial navigation may exchange a token for a cookie.
       if (authGuard?.enabled) {
@@ -2373,9 +2772,47 @@ export function createServer({
         res.end(fs.readFileSync(path.join(__dirname, PAGE_MODULES[url.pathname])));
         return;
       }
+      if (method === 'GET' && url.pathname.startsWith('/assets/demo/')) {
+        const name = url.pathname.slice('/assets/demo/'.length);
+        if (name === 'hotel-lobby.mp4' || name === 'fictional-studio.mp4') {
+          const file = name === 'fictional-studio.mp4' ? path.join(__dirname, 'assets', 'demo', 'fictional-studio.mp4') : demoClipPath(root);
+          if (!file) { res.writeHead(404); res.end('Demo clip not loaded'); return; }
+          sendFile(req, res, file, 'video/mp4', { immutable: url.searchParams.get('v') === demoClipVersion(file) });
+          return;
+        }
+        if (['left-face.png', 'right-face.png', 'left-face-illustrated.png', 'right-face-illustrated.png', 'elon-musk.jpg', 'will-smith.jpg'].includes(name)) {
+          sendFile(req, res, path.join(__dirname, 'assets', 'demo', name), name.endsWith('.jpg') ? 'image/jpeg' : 'image/png');
+          return;
+        }
+        res.writeHead(404); res.end('Not found'); return;
+      }
+      if (method === 'GET' && url.pathname.startsWith('/assets/vendor/mediapipe/')) {
+        const rel = url.pathname.slice('/assets/vendor/mediapipe/'.length);
+        if (!/^(vision_bundle\.mjs|wasm\/vision_wasm_(?:module_|nosimd_)?internal\.(?:js|wasm)|models\/(?:face_landmarker\.task|selfie_segmenter\.tflite))$/.test(rel)) {
+          res.writeHead(404); res.end('Not found'); return;
+        }
+        const type = rel.endsWith('.wasm') ? 'application/wasm' : rel.endsWith('.mjs') || rel.endsWith('.js') ? 'text/javascript' : 'application/octet-stream';
+        sendFile(req, res, path.join(__dirname, 'vendor', 'mediapipe', ...rel.split('/')), type);
+        return;
+      }
+      if (method === 'GET' && url.pathname.startsWith('/assets/vendor/depth/')) {
+        const rel = url.pathname.slice('/assets/vendor/depth/'.length);
+        if (!/^(?:depth-transformers\.js|wasm\/ort-wasm-simd-threaded(?:\.jsep)?\.(?:mjs|wasm)|onnx-community\/depth-anything-v2-small\/(?:config\.json|preprocessor_config\.json|onnx\/model_q4f16\.onnx))$/.test(rel)) {
+          res.writeHead(404); res.end('Not found'); return;
+        }
+        const type = rel.endsWith('.js') || rel.endsWith('.mjs') ? 'text/javascript' : rel.endsWith('.wasm') ? 'application/wasm' : rel.endsWith('.json') ? 'application/json' : 'application/octet-stream';
+        sendFile(req, res, path.join(__dirname, 'vendor', 'depth', ...rel.split('/')), type);
+        return;
+      }
       if (method === 'GET' && url.pathname === '/') {
         let html = fs.readFileSync(UI_HTML);
         if (suiteNavigation) html = Buffer.from(html.toString().replace('<header', '<a class="suite-back" href="/" aria-label="Back to tools">← Your tools</a><header'));
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-length': html.length });
+        res.end(req.method === 'HEAD' ? undefined : html);
+        return;
+      }
+      if (method === 'GET' && (url.pathname === '/apps' || (url.pathname.startsWith('/apps/') && APP_BY_ID[url.pathname.slice(6)]))) {
+        const html = fs.readFileSync(url.pathname === '/apps/video-remix' ? SCENE_REMIX_HTML : APPS_HTML);
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-length': html.length });
         res.end(req.method === 'HEAD' ? undefined : html);
         return;
@@ -2454,6 +2891,15 @@ export function createServer({
         return;
       }
 
+      if (method === 'GET' && url.pathname === '/api/apps/scene-remix/reference') {
+        const id = url.searchParams.get('source');
+        const input = appInput(id, 'video');
+        const file = await silentReference(id, input);
+        res.setHeader('content-disposition', 'attachment; filename="video-remix-model-reference.mp4"');
+        sendFile(req, res, file, 'video/mp4', { immutable: false });
+        return;
+      }
+
       const handler = routes[`${method} ${url.pathname}`];
       if (handler) {
         // Reads are harmless; a write from another site is not — it could spend
@@ -2462,6 +2908,8 @@ export function createServer({
           sendJson(res, 403, { error: 'Cross-site request refused.' });
           return;
         }
+        if (ROUTE_NEEDS[`${method} ${url.pathname}`]) need(ROUTE_NEEDS[`${method} ${url.pathname}`]);
+        if (`${method} ${url.pathname}` === 'POST /api/enhance' && !['images', 'video', 'audio'].some(can)) need('images');
         sendJson(res, 200, (await handler(req, res, url)) ?? { ok: true });
         return;
       }
@@ -2479,6 +2927,13 @@ export function createServer({
 
   server.jobs = jobs;
   server.planGeneration = planGeneration;
+  if (configPath) {
+    const sweep = () => cleanupS3References(configPath).catch(() => {});
+    const timer = setInterval(sweep, 30 * 60_000);
+    timer.unref?.();
+    server.on('close', () => clearInterval(timer));
+    sweep();
+  }
   return server;
 }
 

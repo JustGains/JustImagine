@@ -19,17 +19,17 @@ test('the page has a head bootstrap and an app script, and both parse', () => {
   expect(app.split('\n').length).toBeGreaterThan(400);
 });
 
-// A saved dark preference has to be on the html element before the first paint,
-// or the page flashes white on every load.
+// The theme is Just Superhuman's, shared with every app under the key shell.js
+// writes. A saved choice has to be on the html element before the first paint
+// (shell.js is deferred), or the page flashes the wrong theme on every load.
 test('the theme bootstrap applies a saved preference before anything renders', () => {
   const head = html.slice(0, html.indexOf('</head>'));
   expect(head).toContain(bootstrap.trim().slice(0, 40));
-  expect(bootstrap).toContain("localStorage.getItem('justimagine:v1')");
-  expect(bootstrap).toContain("setAttribute('data-theme', 'dark')");
+  expect(head.indexOf(bootstrap.trim().slice(0, 40))).toBeLessThan(head.indexOf('superhuman/superhuman.css'));
+  expect(bootstrap).toContain("localStorage.getItem('sh-theme')");
   // storage can throw outright in a locked-down browser; the page must still boot
   expect(bootstrap).toMatch(/try\s*\{[\s\S]*\}\s*catch/);
 
-  // and it must actually work: run it against a fake localStorage
   const run = (stored) => {
     const el = { attrs: {}, setAttribute(k, v) { this.attrs[k] = v; } };
     new Function('localStorage', 'document', bootstrap)(
@@ -38,10 +38,10 @@ test('the theme bootstrap applies a saved preference before anything renders', (
     );
     return el.attrs['data-theme'];
   };
-  expect(run(JSON.stringify({ theme: 'dark' }))).toBe('dark');
-  expect(run(JSON.stringify({ theme: 'light' }))).toBeUndefined();
-  expect(run(null)).toBeUndefined(); // nothing saved yet — light is the default
-  expect(run('not json')).toBeUndefined();
+  expect(run('dark')).toBe('dark');
+  expect(run('light')).toBe('light');
+  expect(run(null)).toBeUndefined(); // nothing saved: follow the system
+  expect(run('purple')).toBeUndefined();
 });
 
 test('every element the script reaches for by id exists in the markup', () => {
@@ -164,36 +164,49 @@ test('the page declares a title and a favicon', () => {
   expect(html).toContain('rel="icon"');
 });
 
-// Light is the default and dark is opted into — the system preference is
-// deliberately not consulted, so the media query must not creep back in.
-test('dark mode is an explicit choice, not the system preference', () => {
-  expect(html).not.toContain('prefers-color-scheme');
-  expect(html).toContain('color-scheme: light;');
-  expect(html).toContain("[data-theme='dark']");
-
-  // every token defined for light must be redefined for dark, or something
-  // ends up unreadable on the wrong ground
-  const tokensIn = (block) => new Set([...block.matchAll(/(--[\w-]+):/g)].map((m) => m[1]));
-  const light = html.slice(html.indexOf('  :root {'), html.indexOf("  :root[data-theme='dark']"));
-  const darkStart = html.indexOf("  :root[data-theme='dark']");
-  const dark = html.slice(darkStart, html.indexOf('\n  }', darkStart));
-  // font/shape tokens are theme-independent; colours are not
-  const colourish = (t) => !/^--(sans|mono|radius|ease)$/.test(t);
-  const missing = [...tokensIn(light)].filter((t) => colourish(t) && !tokensIn(dark).has(t));
-  expect(missing).toEqual([]);
+test('the page is built on the Just Superhuman kit', () => {
+  expect(html).toContain('<html lang="en" class="sh">');
+  // relative, so it resolves to /superhuman/ standalone and inside the suite (/imagine)
+  expect(html).toContain('<link rel="icon" href="superhuman/mark.svg" type="image/svg+xml">');
+  expect(html).toContain('<link rel="stylesheet" href="superhuman/superhuman.css">');
+  expect(html).toContain('<script src="superhuman/shell.js" defer></script>');
+  expect(html).toContain('<sh-brand compact app="JustImagine"></sh-brand>');
+  expect(html).toContain('<sh-switcher></sh-switcher>');
+  // Geist comes with the kit; no third-party font requests
+  expect(html).not.toContain('fonts.googleapis.com');
+  expect(html).not.toContain('Montserrat');
 });
 
-test('the theme toggle is a real button that writes the preference back', () => {
+// Colours come from the kit's tokens, which follow the system theme unless
+// <html data-theme> overrides it. The page's own palette is only aliases.
+test('the palette is the kit\'s tokens, in light and dark alike', () => {
+  const top = html.slice(html.indexOf('  :root {'), html.indexOf('\n  }', html.indexOf('  :root {')));
+  const own = [...top.matchAll(/(--[\w-]+):\s*([^;]+);/g)];
+  expect(own.length).toBeGreaterThan(20);
+  // Only the per-section colours, and the glass laid over media, are literal.
+  const literal = own.filter(([, name, value]) => !value.includes('var(--sh-') && !/^--(song|song-soft|voice|voice-soft|glass|on-media)$/.test(name));
+  expect(literal.map(([, n]) => n)).toEqual([]);
+  // the literal section colours have a dark twin for the system and for the switch
+  expect(html).toContain('@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {');
+  expect(html).toContain(':root[data-theme="dark"] {');
+});
+
+test('the theme toggle is a real button that hands the choice to the kit', () => {
   expect(html).toContain('id="theme"');
   expect(html).toContain('aria-pressed');
   // one icon each way, and only the one you would switch *to* is shown
   expect(html).toContain('class="sun"');
   expect(html).toContain('class="moon"');
-  expect(html).toContain(":root:not([data-theme='dark']) #theme .moon");
-  expect(html).toContain(":root[data-theme='dark'] #theme .sun");
-  expect(app).toContain("save({ theme: dark ? 'dark' : 'light' })");
-  // light is the absence of the attribute, which is what the bootstrap reads
-  expect(app).toContain("removeAttribute('data-theme')");
+  expect(html).toContain("#theme[aria-pressed='false'] .moon, #theme[aria-pressed='true'] .sun { display: block; }");
+  expect(app).toContain("SH.setTheme(dark ? 'dark' : 'light')");
+  expect(app).toContain("document.addEventListener('sh:theme', paintThemeButton)");
+});
+
+test('the page adds its own actions to the ⌘K menu', () => {
+  expect(app).toContain('SH.command(');
+  for (const id of ['image', 'video', 'song', 'voice', 'character', 'cast', 'settings']) expect(app).toContain(`cmd('${id}', `);
+  // nothing here binds Ctrl/⌘+K itself, so the kit's menu keeps it
+  expect(html).not.toContain('data-sh-palette="off"');
 });
 
 test('the composer has a section per kind, each with its own controls', () => {

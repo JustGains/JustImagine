@@ -57,11 +57,22 @@ curl -H "Authorization: Bearer $TOKEN" "$BASE/api/state"
 
 The `/health` endpoint is intentionally unauthenticated so service managers can check liveness. Embedding hosts may pass `auth: false` when they already own access control; Bro-CLI does this for its loopback gallery.
 
+### Permissions and who made what (embedding hosts)
+
+A host that signs people in (TekPrepperAI does) can pass two more options to `createServer`:
+
+- `permit(permission)`: return whether the person making the current request may do something. It is asked on every request, so a role change applies at once. The permissions are `images` (images, image apps, the prompt writer), `video` (video and video apps), `audio` (songs, voices, speech), `cast` (characters and their references), `organize` (folders, moving and deleting media) and `keys` (provider keys and settings). A refused request gets `403` with a message naming what is missing. `GET /api/state` returns `permissions`: the list allowed, or `null` when everything is.
+- `actor()`: return the person making the current request (for example `{ id, name, via }`). Every generation, upload and app result records it as `by` in the gallery history and in the job's result.
+
+Without them, as in a local install, everything is allowed and nothing is stamped.
+
 ## Routes
 
 | Route | Purpose |
 | --- | --- |
 | `GET /api/state` | Everything the UI needs to boot: gallery root, image APIs, live video, song and voice model catalogues, folder tree, reference library, in-flight jobs, last settings |
+| `GET /api/apps` | The guided Apps catalog, recommended models, and local-tool readiness |
+| `POST /api/apps/run` | Run an app with `{app, input?, values, api?, model?}`; returns a job id. `input` is a temporary upload id (below) |
 | `GET /api/settings` | The composer's last choices: provider, model per provider, knobs, folder |
 | `POST /api/settings` | A patch of them; merged, unknown keys dropped |
 | `GET /api/models` | The catalogue on its own — every knob a generation may set. `?kind=image\|video\|song\|voice`, `?api=`, `?q=`, `?detail=1`, `?limit=`, `?sort=speed\|quality\|cost\|new` |
@@ -98,9 +109,9 @@ The `/health` endpoint is intentionally unauthenticated so service managers can 
 | `POST /api/voices/clone` | `{samples: [dataUrl…], name?, characterId?, removeNoise?}` → an instant clone from recordings |
 | `POST /api/voices/say` | `{voice, text?, settings?, model?}` → hear a voice say a line; nothing is filed |
 | `POST /api/transcribe` | `{folder, file}` for a song in the gallery, or `{dataUrl}` for a short audio clip → when each word is sung (OpenRouter Whisper, on the `openrouter` key); songs up to 24 MB |
-| `POST /api/media` | `{folder, name, size, meta?, kind?}` → start a chunked upload of a finished file (a stitched music video, a song or voice line made elsewhere); returns `{id}`. `kind: "voice"` files audio as a voice line rather than a song |
+| `POST /api/media` | `{folder, name, size, meta?, kind?, temporary?}` → start a chunked upload; returns `{id}`. Set `temporary: true` for an Apps input that should stay out of the gallery |
 | `POST /api/media/chunk?id=<id>&offset=<n>` | The next raw bytes of that upload (up to 32 MB each, in order) → `{received}`; a wrong `offset` is a `409` |
-| `POST /api/media/done` | `{id}` → file it in the folder, typed by its bytes (image, video or audio); returns `{item}` |
+| `POST /api/media/done` | `{id}` → file it in the folder and return `{item}`, or return `{input: {id, type, name}}` for a temporary Apps upload |
 | `POST /api/thumb` | `{folder, file, dataUrl}` → cache a JPEG thumbnail |
 | `GET /media/<file>?f=<folder>` | The media itself. Supports byte ranges, so `<video>` can seek. Add `&dl=1` for a download disposition |
 | `GET /thumb/<file>?f=<folder>` | The cached thumbnail, or 404 if none has been made yet |
@@ -116,6 +127,98 @@ carrying another site's `Origin` (or a cross-site `Sec-Fetch-Site`) is refused
 with `403 Cross-site request refused.` Reads are unaffected, and a non-browser
 client that sends no `Origin` at all — curl, a script — is allowed through as
 before.
+
+## Guided Apps
+
+`GET /api/apps` lists all 15 workflows and reports which engines are ready.
+To edit an image or process a video, start a temporary upload with
+`POST /api/media` (`{"name":"portrait.png","size":12345,"temporary":true}`), send
+its bytes to `/api/media/chunk`, then call `/api/media/done`. Pass the returned
+`input.id` to an app:
+
+```json
+{"app":"change-age","input":"<input id>","values":{"age":65}}
+```
+
+Send that JSON to `POST /api/apps/run`. It returns `jobs`; poll the first id with
+`GET /api/jobs?ids=<job id>&wait=5`. The finished item is saved under
+`Apps/<app title>` and can be downloaded with the usual `/media/` route.
+`video-generator` accepts an optional opening image. `vectorize` takes a
+description in `values.prompt` and returns an SVG.
+
+The face apps are `skin-editor`, `retouch-portrait`, `change-hair`, `change-age`,
+and `change-expression`. The image apps are `image-editor`, `expand-image`,
+`remove-object`, `remove-light`, `upscaler`, and `vectorize`. The video apps are
+`video-generator`, `video-trim`, `ugc-audio-fixer`, and `video-remix`. Read each app's controls
+from the Apps page at `/apps/<app id>`.
+
+Video Remix has its own page at `/apps/video-remix`. The browser runs a local
+Depth Anything V2 model and person segmenter to prepare a 4–30 second guide
+with an audio track, then uploads it as a temporary input. The guide keeps the
+background in color and renders people as depth shapes. Full depth and face
+lines are also available. Preparation sends two source frames to the connected
+vision model for an editable background description. The demo guide is cached
+in the browser by clip version and settings. The page asks the user to review
+the entire clip before generation. Its route is
+`POST /api/apps/scene-remix`:
+
+```json
+{"source":"<temporary video input id>","character":"<left image input id>","character2":"<optional right image input id>","reviewed":true,"videoRef":"https://example.com/silent-reference.mp4","model":"bytedance/seedance-2.0-mini","resolution":"480p","aspectRatio":"16:9","mode":"person-mask","backgroundColor":"#c65810","scene":"Orange studio backdrop with a hanging microphone"}
+```
+
+`videoRef` must be a public HTTPS link to the **silent** model reference so
+the provider can fetch it without inspecting the source audio. The original
+prepared input keeps its audio for the final export. The response contains `jobs`; poll it through
+`GET /api/jobs`. The saved result records whether the original audio was
+restored. A restoration failure saves the model output with `restoreError` so
+the generated video remains downloadable. `GET /api/apps` reports compatible
+Seedance 2.0 Mini, Seedance 2.0, and Seedance 2.5 under `sceneRemix.models`, the maximum clip
+length under `sceneRemix.maxSeconds`, edit availability under each model's
+`editReady`, its provider under `api`, and whether automatic hosting is available.
+OpenRouter's Seedance 2.5 entry is marked unavailable for edits. OpenLux's
+`doubao-seedance-2-5-260628` entry uses its native edit route, which sets
+`omni_reference_task_type: "edit"`, `ratio: "adaptive"`, and `duration: -1`.
+
+To make a 480p Seedance 2.5 draft through OpenLux, send the same body with
+`"model":"doubao-seedance-2-5-260628"` and `"draft":true`. The saved result
+includes `generationId` and `draft:true`. OpenLux currently rejects
+`content.draft_task` requests, so `sceneRemix.models[].draftFinishReady` is
+false. The final button sends a new edit with the prepared guide at 1080p;
+its result may differ from the draft. A direct `draftTaskId` request is rejected
+before a model call. If OpenLux reports `supply_unavailable` for the draft,
+JustImagine retries once as a regular 480p edit. That result has
+`draftFallback:true` and no `draft:true`. The source input supplies the
+original soundtrack for either result.
+
+While OpenLux runs, `GET /api/jobs` includes `providerTaskId`. If the app loses
+its connection after the task starts, submit the same `source` and model to
+`POST /api/apps/scene-remix` with `resumeTaskId`, the expected `resolution`,
+and `reviewed:true`. This polls and downloads the existing OpenLux task; it
+does not request another generation. The prepared input supplies the original
+audio when the result is saved.
+The page has four local face presets: two fictional portraits, Elon Musk, and
+Will Smith. Each can fill either character slot. Uploaded images still work.
+Changing a face keeps a prepared person-mask guide and hosted reference for
+reuse. The photo sources and licenses are linked in the picker.
+`GET /api/apps/scene-remix/reference?source=<input id>` downloads the silent
+reference for manual hosting. `GET /api/apps/scene-remix/storage` returns S3
+status without credentials. `POST /api/apps/scene-remix/storage` saves
+`endpoint`, `region`, `bucket`, `prefix`, `accessKeyId`, and `secretAccessKey`
+after a live upload/read/delete test. Blank key fields retain saved keys.
+`POST /api/apps/scene-remix/storage/remove` removes the settings. They live
+beside the server's config file, outside the gallery. With S3 configured,
+`POST /api/apps/scene-remix/share` uploads a silent copy to the private bucket
+and returns a two-hour signed URL. Expired objects are deleted by a persisted
+cleanup sweep. The existing `JUSTIMAGINE_VIDEO_RELAY` receives the same silent
+copy when S3 is not configured. The final step starts a
+new generation. OpenRouter does not expose a same-task 1080p upgrade here.
+
+`POST /api/apps/scene-remix/demo` with `{"clip":"fictional"}` returns the
+bundled four-second studio test clip and two illustrated fictional portraits.
+With `{"clip":"orange"}`, it returns the original performance clip and the
+same portraits. The orange clip is downloaded locally with yt-dlp and FFmpeg
+on first use. The app serves both clips from `/assets/demo/`; the original
+performance is not bundled with the package.
 
 ## Which model, and what it accepts
 

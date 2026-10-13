@@ -60,3 +60,34 @@ test('Bro host policy serves the gallery without creating an authentication toke
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('the Just Superhuman kit is served ahead of the auth gate, typed and cacheable', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ji-http-kit-'));
+  const auth = createAuth({ token: 'test-only-token' });
+  const server = createServer({ root, charactersRoot: path.join(root, 'cast'), apis: [], auth });
+  const port = await listenOnFreePort(server, 0);
+  const base = `http://127.0.0.1:${port}`;
+  try {
+    const types = {
+      '/superhuman/superhuman.css': 'text/css',
+      '/superhuman/shell.js': 'text/javascript',
+      '/superhuman/mark.svg': 'image/svg+xml',
+      '/superhuman/fonts/Geist-Variable.woff2': 'font/woff2'
+    };
+    for (const [route, type] of Object.entries(types)) {
+      const r = await fetch(base + route);
+      expect(r.status).toBe(200);
+      expect(r.headers.get('content-type')).toContain(type);
+      expect(r.headers.get('cache-control')).toContain('public');
+      await r.arrayBuffer();
+    }
+    for (const route of ['/superhuman/missing.css', '/superhuman/../justimagine-server.js', '/superhuman/%2e%2e/auth.js', '/superhuman/fonts/', '/superhuman/README.md']) {
+      const r = await fetch(base + route);
+      expect([401, 404]).toContain(r.status);
+      expect(await r.text()).not.toContain('import ');
+    }
+  } finally {
+    server.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

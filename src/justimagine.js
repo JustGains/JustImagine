@@ -167,7 +167,8 @@ APIs:
 ${apiLines}
 
   Keys are shared with the chat provider of the same id, so a saved
-  yunwu key just works. Video always uses the ${VIDEO_KEY_API} key.
+  yunwu key just works. Video uses the key for the provider you select;
+  OpenLux Seedance 2.5 edits also work in Video Remix.
   Add more APIs via the "imageApis" array in your config file.
 
 Background service:

@@ -18,6 +18,8 @@ node_modules/
 *.log
 coverage/
 dist/
+.tmp-video-reference/
+.playwright-mcp/
 
 # Editors, OS and local agent settings
 .vscode/

@@ -491,6 +491,22 @@ function armEnhancer() {
   return () => delete process.env.JUSTIMAGINE_CHAT_URL;
 }
 
+test('scene description sends source frames to the connected vision model', async () => {
+  const done = armEnhancer();
+  try {
+    const frames = ['data:image/jpeg;base64,/9j/2Q==', 'data:image/jpeg;base64,/9j/2Q=='];
+    const response = await post('/api/enhance', { kind: 'scene-background', frames });
+    expect(response.status).toBe(200);
+    expect(response.body.description).toBe('a much better cat');
+    const sent = JSON.parse(lastUpstreamBody());
+    expect(sent.model).toBe('google/gemini-3.7-flash');
+    expect(sent.max_tokens).toBeGreaterThanOrEqual(800);
+    expect(sent.messages[1].content.filter((part) => part.type === 'image_url').map((part) => part.image_url.url)).toEqual(frames);
+    const invalid = await post('/api/enhance', { kind: 'scene-background', frames: ['https://example.com/clip.jpg'] });
+    expect(invalid.status).toBe(400);
+  } finally { done(); }
+});
+
 test('a prompt is rewritten, with the model and the cast folded into the instruction', async () => {
   await post('/api/characters', { name: 'Nora', description: 'green field jacket' });
   const done = armEnhancer();
@@ -1467,4 +1483,43 @@ test('with no leaderboard the gallery still serves models, just unranked', async
     s.jobs.closeAll();
     await shutdown(s);
   }
+});
+
+test('a host can limit what a person may do, and every item records who made it', async () => {
+  const allowed = new Set(['images']);
+  const hosted = createServer({
+    root, charactersRoot: charRoot, resolveKey: (id) => keys[id] || '', defaultApi: 'fake',
+    apis: [{ id: 'fake', name: 'Fake', imagesUrl: `${upstreamBase}/v1/images/generations`, models: [{ id: 'gpt-image-1', name: 'Fake Image' }] }],
+    videoModels: [{ id: 'google/veo-3.1', name: 'Veo 3.1', durations: [4], audio: true }],
+    permit: (p) => allowed.has(p),
+    actor: () => ({ id: 'u1', name: 'Sam', via: 'assistant' })
+  });
+  const at = `http://127.0.0.1:${await listenOnFreePort(hosted, 0)}`;
+  const send = async (p, body) => { const r = await fetch(at + p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }); return { status: r.status, body: await r.json() }; };
+  try {
+    const state = await (await fetch(at + '/api/state')).json();
+    expect(state.permissions).toEqual(['images']);
+    const made = await send('/api/generate', { kind: 'image', folder: 'Set', prompt: 'a red bicycle', model: 'gpt-image-1', wait: 20 });
+    expect(made.status).toBe(200);
+    expect(made.body.items[0].by).toEqual({ id: 'u1', name: 'Sam', via: 'assistant' });
+    expect(listItems(root, 'Set')[0].by).toEqual({ id: 'u1', name: 'Sam', via: 'assistant' });
+    const video = await send('/api/generate', { kind: 'video', prompt: 'waves', model: 'google/veo-3.1' });
+    expect(video.status).toBe(403);
+    expect(video.body.error).toMatch(/generate video/);
+    expect((await send('/api/folder', { parent: '', name: 'X' })).status).toBe(403);
+    expect((await send('/api/characters', { name: 'Ava' })).status).toBe(403);
+    expect((await send('/api/config/key', { id: 'fake', key: 'k' })).status).toBe(403);
+    allowed.add('organize'); // a role change applies to the next request
+    expect((await send('/api/folder', { parent: '', name: 'X' })).status).toBe(200);
+  } finally {
+    hosted.jobs.closeAll();
+    await shutdown(hosted);
+  }
+});
+
+test('without a host, everything is allowed and nothing is stamped', async () => {
+  const state = await getJson('/api/state');
+  expect(state.permissions).toBe(null);
+  const { body } = await post('/api/generate', { kind: 'image', folder: '', prompt: 'p', model: 'gpt-image-1', wait: 20 });
+  expect(body.items[0].by).toBeUndefined();
 });

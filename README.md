@@ -41,6 +41,63 @@ npm start -- --help                 # every option
 
 ## A tour
 
+### Apps for specific jobs
+
+Open **Apps** from the gallery when you have a particular edit in mind. There
+are 15 guided workflows: portrait and skin edits, hair and expression changes,
+image expansion and object removal, video generation and trimming, audio cleanup,
+upscaling, and text-to-SVG drawing. Each app asks for the source and the few
+choices that matter, then saves the result in an **Apps** folder in your gallery.
+
+The image apps pick a reference-aware model with a configured provider key. You
+can choose a different compatible model in the app. **Vectorize** uses the
+configured text model and downloads a real SVG made of editable shapes.
+**Upscaler**, **Video Trim**, and **UGC Audio Fixer** run locally with FFmpeg and
+FFprobe; install those commands before using these three apps. Upscaler uses
+Lanczos scaling with optional sharpening. Audio Fixer reduces noise and levels
+the track. These local processing apps are available in standalone JustImagine.
+
+**Video Remix** at `/apps/video-remix` accepts a clip and one or two character
+images. Chrome and Edge prepare a 24 fps guide in the browser with a self-hosted
+Depth Anything V2 model and a local person mask. The people become depth shapes
+while the original background stays in color. Full depth and face lines are
+available as alternate guides. The app drafts an editable background description
+from two source frames during preparation. A prepared demo guide is saved in the
+browser, so loading the same demo and settings skips depth estimation next time.
+Review the full guide before generation. JustImagine restores the original audio
+track to the result. The app uses the existing OpenLux or OpenRouter key and
+FFmpeg. The model receives a silent copy of the guide. OpenLux Seedance 2.5 is
+the default when connected and accepts clips up to 30 seconds. OpenRouter
+Seedance 2.0 and Mini accept up to 15 seconds. OpenRouter's Seedance 2.5 entry
+stays unavailable for edits because that route rejects the required duration.
+OpenLux currently rejects upgrades from a draft task ID, so the 1080p final
+is a new edit from the guide and may differ from the 480p draft. If OpenLux
+cannot supply draft mode, the app makes a regular 480p preview instead.
+Photo-style fictional faces and real-person portraits can trigger the model's
+portrait check. The face picker has two fictional portraits plus photos of Elon
+Musk and Will Smith. Choose either face for the left or right person, or upload
+your own image. The video model can still decline protected footage.
+Set up S3 in the Video Remix page to host the silent copy automatically in a
+private bucket. The app tests the connection, saves the keys on the server,
+and gives the provider a two-hour signed HTTPS link. Old uploads are removed
+after their links expire. Tigris works with endpoint `https://t3.storage.dev`
+and region `auto`; standard AWS S3 works without a custom endpoint. The older
+`JUSTIMAGINE_VIDEO_RELAY` setting still works and also receives the silent
+copy. Without automatic hosting, download the **silent model reference** and
+paste its direct HTTPS link. A 1080p final on Seedance 2.0 is a new generation
+and may differ from the preview.
+
+Both demos load the same two fictional face references by default.
+**Fictional studio** is a bundled four-second clip for testing preparation.
+Seedance 2.5 may flag its realistic-looking people as real-person content.
+**Orange performance** loads the original eight-second studio clip for testing
+guide preparation; the video provider has rejected generations from it as too
+close to protected footage. If the orange clip is not already on disk, JustImagine downloads the
+50–58 second section of the [official Quavo and Takeoff COLORS performance](https://www.youtube.com/watch?v=x9yop0nYR9g)
+with yt-dlp and FFmpeg. The source clip stays in a local cache; it is not
+bundled with the package. You can also download it with
+`powershell -File scripts/download-remix-test.ps1`.
+
 ### Characters that stay the same shot after shot
 
 Save a character with a few reference images and a voice. Pick them when you

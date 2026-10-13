@@ -67,6 +67,19 @@ export const VIDEO_FAMILIES = [
     // Volcengine Ark's task API. Priced per million video tokens, with a
     // per-variant multiplier from openlux.ai's pricing page; quoted per second
     // at 720p using ByteDance's token formula.
+    match: /^doubao-seedance-2-5-/,
+    adapter: 'seedance',
+    spec: {
+      durations: Array.from({ length: 27 }, (_, i) => i + 4),
+      resolutions: ['480p', '720p', '1080p'],
+      aspectRatios: ['adaptive', '16:9', '9:16', '1:1', '4:3', '3:4', '21:9'],
+      frames: ['first_frame', 'last_frame'],
+      audio: true,
+      seed: true
+    },
+    price: (m, g) => ({ perSecond: ((m.model_price * g * seedanceMultiplier(m.model_name)) / 1e6) * SEEDANCE_TOKENS_720P, basis: '720p' })
+  },
+  {
     match: /^doubao-seedance-2-/,
     adapter: 'seedance',
     spec: {
@@ -242,7 +255,7 @@ export function mergeOpenLuxCatalogue(api, catalogue, videoModels = []) {
 const urlOf = (ref) => ref?.url || ref?.dataUrl || '';
 const set = (v) => v && v !== 'auto';
 
-export function buildOpenLuxVideoRequest(adapter, { model, prompt, duration, resolution, aspectRatio, generateAudio, seed, firstFrame, lastFrame, refs = [], audioRefs = [] }) {
+export function buildOpenLuxVideoRequest(adapter, { model, prompt, duration, resolution, aspectRatio, generateAudio, seed, firstFrame, lastFrame, refs = [], audioRefs = [], videoRefs = [], draft = false, draftTaskId }) {
   const origin = OPENLUX_ORIGIN();
   if (adapter === 'openai-videos') {
     const form = new FormData();
@@ -268,7 +281,17 @@ export function buildOpenLuxVideoRequest(adapter, { model, prompt, duration, res
     return { url: `${origin}/v1/videos/generations`, body };
   }
   if (adapter === 'seedance') {
+    const is25 = /^doubao-seedance-2-5-/.test(model);
+    if (draftTaskId) {
+      if (!is25 || draft || resolution !== '1080p' || videoRefs.length || refs.length || audioRefs.length || firstFrame || lastFrame) {
+        throw new Error('A Seedance 2.5 final render needs only its draft task ID and 1080p resolution.');
+      }
+      return { url: `${origin}/api/v3/contents/generations/tasks`, body: {
+        model, content: [{ type: 'draft_task', draft_task: { id: draftTaskId } }], resolution: '1080p'
+      } };
+    }
     const content = [{ type: 'text', text: prompt }];
+    for (const video of videoRefs) content.push({ type: 'video_url', video_url: { url: urlOf(video) }, role: 'reference_video' });
     if (firstFrame) content.push({ type: 'image_url', image_url: { url: urlOf(firstFrame) }, role: 'first_frame' });
     if (lastFrame) content.push({ type: 'image_url', image_url: { url: urlOf(lastFrame) }, role: 'last_frame' });
     if (!firstFrame) for (const r of refs) content.push({ type: 'image_url', image_url: { url: urlOf(r) }, role: 'reference_image' });
@@ -276,11 +299,21 @@ export function buildOpenLuxVideoRequest(adapter, { model, prompt, duration, res
     // and keeps it as the clip's own sound.
     for (const a of audioRefs) content.push({ type: 'audio_url', audio_url: { url: urlOf(a) }, role: 'reference_audio' });
     const body = { model, content };
-    if (duration) body.duration = Number(duration);
+    if (videoRefs.length && is25) {
+      body.omni_reference_task_type = 'edit';
+      body.duration = -1;
+      body.ratio = 'adaptive';
+    } else {
+      if (duration) body.duration = Number(duration);
+      if (set(aspectRatio)) body.ratio = aspectRatio;
+    }
     if (set(resolution)) body.resolution = resolution;
-    if (set(aspectRatio)) body.ratio = aspectRatio;
     if (typeof generateAudio === 'boolean') body.generate_audio = generateAudio;
     if (Number.isFinite(Number(seed)) && String(seed ?? '').trim() !== '') body.seed = Number(seed);
+    if (draft) {
+      if (!is25 || resolution !== '480p') throw new Error('Seedance 2.5 drafts require 480p resolution.');
+      body.draft = true;
+    }
     return { url: `${origin}/api/v3/contents/generations/tasks`, body };
   }
   throw new Error(`OpenLux has no video route for "${model}".`);
@@ -327,6 +360,8 @@ function assertOk(json) {
   return json;
 }
 
+const transientTaskError = (message) => /fetch failed|network|ECONNRESET|ETIMEDOUT|\b50[234]\b/i.test(String(message || ''));
+
 export async function generateOpenLuxVideo({
   apiKey,
   adapter,
@@ -337,24 +372,42 @@ export async function generateOpenLuxVideo({
   maxMs = 20 * 60 * 1000
 }) {
   const auth = { authorization: `Bearer ${apiKey}` };
-  const req = buildOpenLuxVideoRequest(adapter, params);
-  onProgress({ phase: 'submitting' });
-  const submitted = assertOk(
+  const submit = async (request) => assertOk(
     await readApiResponse(
-      await fetch(req.url, {
+      await fetch(request.url, {
         method: 'POST',
         signal,
-        headers: req.form ? auth : { ...auth, 'content-type': 'application/json' },
-        body: req.form || JSON.stringify(req.body)
+        headers: request.form ? auth : { ...auth, 'content-type': 'application/json' },
+        body: request.form || JSON.stringify(request.body)
       })
     )
   );
-  const id = taskIdOf(submitted);
-  if (!id) throw new Error('OpenLux did not return a task id.');
-  onProgress({ phase: 'queued', jobId: id });
+  let usedDraft = params.draft === true;
+  let submitted;
+  let id;
+  if (params.resumeTaskId) {
+    id = String(params.resumeTaskId);
+    submitted = { id, status: 'queued' };
+    usedDraft = false;
+    onProgress({ phase: 'resuming', jobId: id });
+  } else {
+    onProgress({ phase: 'submitting' });
+    try {
+      submitted = await submit(buildOpenLuxVideoRequest(adapter, params));
+    } catch (error) {
+      if (!usedDraft || !params.videoRefs?.length || !/supply_unavailable|model service is temporarily unavailable/i.test(error.message)) throw error;
+      usedDraft = false;
+      onProgress({ phase: 'starting a regular preview' });
+      submitted = await submit(buildOpenLuxVideoRequest(adapter, { ...params, draft: false }));
+    }
+    id = taskIdOf(submitted);
+    if (!id) throw new Error('OpenLux did not return a task id.');
+    onProgress({ phase: 'queued', jobId: id });
+  }
 
   let job = submitted;
   const started = Date.now();
+  let pollErrors = 0;
   for (let attempt = 0; ; attempt++) {
     const state = taskState(job);
     if (state.done) break;
@@ -362,10 +415,27 @@ export async function generateOpenLuxVideo({
     if (Date.now() - started > maxMs) throw new Error('Video generation timed out.');
     await sleep(pollDelay(attempt));
     if (signal?.aborted) throw new Error('Cancelled.');
-    job = assertOk(await readApiResponse(await fetch(pollUrlOf(adapter, id), { signal, headers: auth })));
+    try {
+      job = assertOk(await readApiResponse(await fetch(pollUrlOf(adapter, id), { signal, headers: auth })));
+      pollErrors = 0;
+    } catch (error) {
+      if (!transientTaskError(error.message) || ++pollErrors > 8) {
+        throw new Error(`OpenLux task ${id} could not be checked: ${error.message}`);
+      }
+      onProgress({ phase: 'reconnecting', jobId: id, attempt, elapsed: Date.now() - started });
+      continue;
+    }
     onProgress({ phase: 'generating', jobId: id, status: taskState(job).status || 'pending', attempt, elapsed: Date.now() - started });
   }
 
+  if (params.resumeTaskId) {
+    const returnedModel = first(job, (x) => x.model);
+    const returnedResolution = first(job, (x) => x.resolution);
+    if (returnedModel && returnedModel !== params.model) throw new Error(`OpenLux task ${id} used ${returnedModel}, not ${params.model}.`);
+    if (returnedResolution && params.resolution && returnedResolution !== params.resolution) {
+      throw new Error(`OpenLux task ${id} used ${returnedResolution}, not ${params.resolution}.`);
+    }
+  }
   // The OpenAI video format may finish without a URL and serve the bytes from
   // /content instead, which needs the key; a third-party CDN URL must not get it.
   let url = videoUrlOf(job);
@@ -373,6 +443,18 @@ export async function generateOpenLuxVideo({
   if (!url) throw new Error('Completed task had no video URL.');
   onProgress({ phase: 'downloading', jobId: id });
   const ours = String(url).startsWith(OPENLUX_ORIGIN());
-  const { buf, ext } = await download(String(url), signal, ours ? auth : {});
-  return { buf, ext: ext === 'bin' ? 'mp4' : ext, cost: first(job, (x) => x.usage?.cost) ?? undefined, generationId: id };
+  let downloaded;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      downloaded = await download(String(url), signal, ours ? auth : {});
+      break;
+    } catch (error) {
+      if (!transientTaskError(error.message) || attempt >= 4) throw new Error(`OpenLux task ${id} finished, but its video could not be downloaded: ${error.message}`);
+      onProgress({ phase: 'reconnecting to download', jobId: id, attempt });
+      await sleep(pollDelay(attempt));
+    }
+  }
+  const { buf, ext } = downloaded;
+  return { buf, ext: ext === 'bin' ? 'mp4' : ext, cost: first(job, (x) => x.usage?.cost) ?? undefined,
+    generationId: id, draft: usedDraft, draftFallback: params.draft === true && !usedDraft };
 }
