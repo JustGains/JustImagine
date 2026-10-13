@@ -332,10 +332,10 @@ const layers = (json) => [json, json?.data, json?.data?.data].filter((x) => x &&
 const first = (json, pick) => layers(json).map(pick).find((v) => v != null && v !== '');
 
 export function taskIdOf(json) {
-  return first(json, (x) => x.task_id ?? x.id);
+  return first(json, (x) => x.task_id ?? x.id ?? x.request_id);
 }
 
-const DONE = new Set(['completed', 'succeeded', 'succeed', 'success', 'video_generation_completed']);
+const DONE = new Set(['done', 'completed', 'succeeded', 'succeed', 'success', 'video_generation_completed']);
 const FAILED = new Set(['failed', 'failure', 'fail', 'error', 'cancelled', 'canceled', 'expired']);
 
 export function taskState(json) {
@@ -344,7 +344,7 @@ export function taskState(json) {
 }
 
 export function videoUrlOf(json) {
-  return first(json, (x) => x.video_url ?? x.content?.video_url ?? x.result_url ?? (typeof x.url === 'string' ? x.url : null));
+  return first(json, (x) => x.video_url ?? x.video?.url ?? x.content?.video_url ?? x.result_url ?? (typeof x.url === 'string' ? x.url : null));
 }
 
 function failureOf(json) {

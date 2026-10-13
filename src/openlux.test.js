@@ -185,11 +185,14 @@ test('each adapter builds the body its route documents', () => {
 test('task fields are found bare or inside the { code, data } envelope', () => {
   expect(taskIdOf({ id: 'video_1' })).toBe('video_1');
   expect(taskIdOf({ code: 0, data: { task_id: 't-2' } })).toBe('t-2');
+  expect(taskIdOf({ request_id: 'grok-3' })).toBe('grok-3');
   expect(taskState({ data: { status: 'SUCCEED' } })).toMatchObject({ done: true, failed: false });
+  expect(taskState({ status: 'done' })).toMatchObject({ done: true, failed: false });
   expect(taskState({ status: 'failed' })).toMatchObject({ done: false, failed: true });
   expect(taskState({ status: 'video_generating' })).toMatchObject({ done: false, failed: false });
   expect(videoUrlOf({ data: { content: { video_url: 'https://cdn/v.mp4' } } })).toBe('https://cdn/v.mp4');
   expect(videoUrlOf({ status: 'completed', video_url: 'https://cdn/w.mp4' })).toBe('https://cdn/w.mp4');
+  expect(videoUrlOf({ status: 'done', video: { url: 'https://cdn/grok.mp4' } })).toBe('https://cdn/grok.mp4');
 });
 
 // ---------- against a fake OpenLux ----------

@@ -1,5 +1,6 @@
 import { canPrepareScene, prepareSceneClip } from './scene-remix-editor.js';
 import { demoGuideKey, loadDemoGuide, saveDemoDescription, saveDemoGuide } from './scene-remix-cache.js';
+import { DEFAULT_FACE_GRID, gridFaceFile, normalizeFaceGridSettings } from './scene-remix-face-grid.js';
 
 const $ = (id) => document.getElementById(id);
 const api = async (url, body) => {
@@ -20,10 +21,15 @@ function remixErrorMessage(message) {
   if (/copyright restrictions/i.test(message)) return 'The model flagged this request under its copyright checks. Try different portraits or a different clip.';
   return message;
 }
-let catalog, source, character, character2, sourceUrl, characterUrl, character2Url, prepared, preparedUrl, preparedInput, characterInput, character2Input, aspectRatio = '16:9';
+let catalog, source, character, character2, sourceUrl, characterUrl, character2Url, characterRawUrl, character2RawUrl, prepared, preparedUrl, preparedInput, characterInput, character2Input, aspectRatio = '16:9';
 let sourceSeconds = 0, busy = false, running = false, demoLoading = false, draftItem = null, abort = null;
 let storage = null, hostedUrl = '', hostedUntil = 0;
 let demoVersion = '', sceneEpoch = 0, sceneEdited = false, autoSceneValue = '';
+let faceGridSettings = { ...DEFAULT_FACE_GRID }, faceGridRenderTimer = null;
+const FACE_GRID_STORAGE_KEY = 'justimagine:scene-remix:face-grid';
+const FACE_GRID_FIELDS = ['columns', 'rows', 'lineWidth', 'opacity', 'offsetX', 'offsetY', 'mosaicSize', 'squiggleAmount'];
+const randomFaceSeed = () => globalThis.crypto?.getRandomValues ? globalThis.crypto.getRandomValues(new Uint32Array(1))[0] : Math.floor(Math.random() * 2 ** 32);
+const faceGridSeeds = { left: randomFaceSeed(), right: randomFaceSeed() };
 const FACE_PRESETS = [
   { id: 'studio-left', name: 'Studio face 1', kind: 'Fictional', file: 'left-face-illustrated.png', type: 'image/png' },
   { id: 'studio-right', name: 'Studio face 2', kind: 'Fictional', file: 'right-face-illustrated.png', type: 'image/png' },
@@ -32,8 +38,9 @@ const FACE_PRESETS = [
 ];
 const selectedFaces = { left: null, right: null };
 const faceLoadId = { left: 0, right: 0 };
+const faceRenderId = { left: 0, right: 0 };
 const maxClipSeconds = () => catalog?.sceneRemix?.maxSeconds || 30;
-const unsupportedFaceSelected = () => ['elon-musk', 'will-smith'].some((id) => Object.values(selectedFaces).includes(id));
+const realPhotoSelected = () => ['elon-musk', 'will-smith'].some((id) => Object.values(selectedFaces).includes(id));
 
 function updateFacePicker() {
   $('facePicker').querySelectorAll('button[data-face-id]').forEach((button) => {
@@ -42,7 +49,7 @@ function updateFacePicker() {
     button.setAttribute('aria-label', `Use ${button.dataset.faceName} for ${button.dataset.faceSide} person${selected ? ', selected' : ''}`);
     button.disabled = !catalog || busy || running || demoLoading;
   });
-  $('faceWarning').classList.toggle('hide', !unsupportedFaceSelected());
+  $('faceWarning').classList.toggle('hide', !realPhotoSelected());
 }
 
 function renderFacePicker() {
@@ -140,8 +147,17 @@ function guideReliable() {
 }
 function readyToGenerate() {
   const imagesReady = !!characterInput && (!character2 || !!character2Input);
-  $('makeDraft').disabled = busy || running || unsupportedFaceSelected() || !catalog.sceneRemix?.ready || !preparedInput || !imagesReady || !goodLink() || !$('reviewed').checked || !guideReliable() || !chosenModel('draftModel')?.editReady;
-  $('makeFinal').disabled = busy || running || unsupportedFaceSelected() || !draftItem || !preparedInput || !imagesReady || (!canFinishDraft(chosenModel('finalModel')) && !goodLink()) || !$('reviewed').checked || !guideReliable() || !chosenModel('finalModel')?.editReady;
+  const draftModelReady = !!chosenModel('draftModel')?.editReady;
+  $('makeDraft').disabled = busy || running || !catalog.sceneRemix?.ready || !preparedInput || !imagesReady || !goodLink() || !$('reviewed').checked || !draftModelReady;
+  $('makeFinal').disabled = busy || running || !draftItem || !preparedInput || !imagesReady || (!canFinishDraft(chosenModel('finalModel')) && !goodLink()) || !$('reviewed').checked || !chosenModel('finalModel')?.editReady;
+  $('generationHint').textContent = busy ? 'Preparing the clip…' : running ? 'Generation is in progress…'
+    : !catalog.sceneRemix?.ready ? 'Connect an available Seedance model to generate.'
+      : !preparedInput ? 'Prepare the clip first.'
+        : !imagesReady ? 'Wait for the face images to finish uploading.'
+          : !goodLink() ? 'Add a direct HTTPS link to the silent model reference.'
+            : !$('reviewed').checked ? 'Check the box after reviewing the guide.'
+              : !draftModelReady ? 'Choose an available draft model.' : 'Ready to generate.';
+  $('faceGridFields').disabled = busy || running || demoLoading;
   updateFacePicker();
 }
 function clearResults() {
@@ -263,7 +279,14 @@ function renderRange() {
   $('clipHint').textContent = start + seconds <= sourceSeconds + .08 ? `Selected ${seconds} seconds, from ${start.toFixed(1)} to ${(start + seconds).toFixed(1)}.` : 'This range runs past the end of the clip.';
   readyToPrepare();
 }
-function readyToPrepare() { $('prepare').disabled = busy || !source || !character || !canPrepareScene() || (() => { try { clipRange(); return false; } catch { return true; } })(); }
+function readyToPrepare() {
+  const invalidRange = (() => { try { clipRange(); return false; } catch { return true; } })();
+  $('prepare').disabled = busy || !source || !character || !canPrepareScene() || invalidRange;
+  $('prepareHint').textContent = !source ? 'Add or load a source clip to continue.'
+    : !character ? 'Add at least one face.'
+      : invalidRange ? `Choose 4–${maxClipSeconds()} seconds inside the clip.`
+        : !canPrepareScene() ? 'Use Chrome or Edge with WebGPU to prepare the clip.' : 'Ready to prepare.';
+}
 function fileDrop(zone, picker, receive) {
   $(zone).onclick = (event) => { if (!event.target.closest('button')) $(picker).click(); };
   $(zone).ondragover = (event) => { event.preventDefault(); $(zone).classList.add('drag'); };
@@ -300,28 +323,167 @@ function receiveSource(file) {
   $('sourcePreview').src = sourceUrl;
   clearPrepared(); step(1); readyToPrepare(); errorText('draftError', '');
 }
+async function renderCharacterFace(second = false) {
+  const side = second ? 'right' : 'left';
+  const prefix = second ? 'character2' : 'character';
+  const file = second ? character2 : character;
+  if (!file) return false;
+  const request = ++faceRenderId[side];
+  if (second) character2Input = ''; else characterInput = '';
+  $(`${prefix}Status`).textContent = 'Preparing face…';
+  $(`${prefix}PreviewButton`).disabled = true;
+  $(`${prefix}Preview`).src = second ? character2RawUrl : characterRawUrl;
+  readyToGenerate();
+  try {
+    const gridded = await gridFaceFile(file, faceGridSettings, faceGridSeeds[side]);
+    if (request !== faceRenderId[side]) return false;
+    const url = URL.createObjectURL(gridded);
+    if (second) { if (character2Url) URL.revokeObjectURL(character2Url); character2Url = url; }
+    else { if (characterUrl) URL.revokeObjectURL(characterUrl); characterUrl = url; }
+    $(`${prefix}Preview`).src = url;
+    $(`${prefix}PreviewButton`).disabled = false;
+    const dialog = $('facePreviewDialog');
+    if (dialog.open && dialog.dataset.side === side) $('facePreviewImage').src = url;
+    $(`${prefix}Status`).textContent = 'Uploading face with grid…';
+    const id = await uploadTemporary(gridded, gridded.name);
+    if (request !== faceRenderId[side]) return false;
+    if (second) character2Input = id; else characterInput = id;
+    $(`${prefix}Status`).textContent = 'Face ready with grid and mosaic.';
+    readyToGenerate();
+    return true;
+  } catch (error) {
+    if (request === faceRenderId[side]) {
+      $(`${prefix}Status`).textContent = error.message;
+      errorText('draftError', `Could not add the ${side} face: ${error.message}`);
+    }
+    return false;
+  }
+}
+
 async function receiveCharacter(file, second = false, presetId = null) {
   if (!/^(image\/(png|jpeg|webp))$/.test(file.type) && !/\.(png|jpe?g|webp)$/i.test(file.name)) { errorText('draftError', 'Choose a PNG, JPEG, or WebP image.'); return; }
   if (file.size > 32 * 1024 * 1024) { errorText('draftError', 'Use an image under 32 MB.'); return; }
   selectedFaces[second ? 'right' : 'left'] = presetId;
+  faceGridSeeds[second ? 'right' : 'left'] = randomFaceSeed();
   updateFacePicker();
   const prefix = second ? 'character2' : 'character';
   const reuseGuide = !!prepared && selectedMode() === 'person-mask';
   if (second && selectedMode() === 'face-mesh') document.querySelector('input[name=mode][value=person-mask]').checked = true;
-  if (second) { character2 = file; character2Input = ''; if (character2Url) URL.revokeObjectURL(character2Url); character2Url = URL.createObjectURL(file); }
-  else { character = file; characterInput = ''; if (characterUrl) URL.revokeObjectURL(characterUrl); characterUrl = URL.createObjectURL(file); }
-  $(`${prefix}Preview`).src = second ? character2Url : characterUrl;
+  if (second) { character2 = file; character2Input = ''; if (character2RawUrl) URL.revokeObjectURL(character2RawUrl); character2RawUrl = URL.createObjectURL(file); }
+  else { character = file; characterInput = ''; if (characterRawUrl) URL.revokeObjectURL(characterRawUrl); characterRawUrl = URL.createObjectURL(file); }
+  $(`${prefix}Preview`).src = second ? character2RawUrl : characterRawUrl;
   $(`${prefix}Name`).textContent = file.name; $(`${prefix}Drop`).classList.add('has-file'); $(`${prefix}Loaded`).classList.remove('hide');
   if (reuseGuide) clearResults(); else clearPrepared();
   readyToPrepare(); readyToGenerate(); errorText('draftError', '');
-  try { const id = await uploadTemporary(file, file.name); if (second && character2 === file) character2Input = id; else if (!second && character === file) characterInput = id; readyToGenerate(); return true; }
-  catch (error) { if ((second ? character2 : character) === file) errorText('draftError', `Could not add the character: ${error.message}`); return false; }
+  return renderCharacterFace(second);
+}
+
+function previewCharacterFace(second = false) {
+  const prefix = second ? 'character2' : 'character';
+  const dialog = $('facePreviewDialog');
+  dialog.dataset.side = second ? 'right' : 'left';
+  $('facePreviewTitle').textContent = second ? 'Right face' : 'Left face';
+  $('facePreviewImage').src = $(`${prefix}Preview`).src;
+  $('facePreviewImage').alt = `${second ? 'Right' : 'Left'} face with alignment grid`;
+  updateFacePreviewCaption();
+  dialog.showModal();
+}
+
+function updateFacePreviewCaption() {
+  const grid = faceGridSettings;
+  $('facePreviewCaption').textContent = `Face prepared for the model · ${grid.columns}×${grid.rows} grid · ${grid.lineWidth} px lines · ${grid.mosaicSize ? `${grid.mosaicSize} px mosaic` : 'mosaic off'}${grid.squiggle ? ` · ${grid.squiggleAmount}% squiggle` : ''}`;
+}
+
+function renderFaceGridSettings() {
+  const grid = faceGridSettings;
+  for (const key of FACE_GRID_FIELDS) {
+    const id = `faceGrid${key[0].toUpperCase()}${key.slice(1)}`;
+    $(id).value = String(grid[key]);
+    $(`${id}Range`).value = String(grid[key]);
+  }
+  $('faceGridColorPicker').value = grid.color;
+  $('faceGridColorHex').value = grid.color;
+  $('faceGridSquiggle').checked = grid.squiggle;
+  $('faceGridSquiggleControls').classList.toggle('hide', !grid.squiggle);
+  document.querySelectorAll('[data-grid-color]').forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.gridColor === grid.color)));
+  const colorName = { '#FFFFFF': 'white', '#000000': 'black', '#FF0000': 'red', '#00FF00': 'green', '#0000FF': 'blue', '#FFFF00': 'yellow' }[grid.color] || grid.color;
+  $('faceGridSummary').textContent = `${grid.columns} × ${grid.rows} · ${grid.lineWidth} px · ${colorName} · mosaic ${grid.mosaicSize} px${grid.squiggle ? ` · squiggle ${grid.squiggleAmount}%` : ''}`;
+  if ($('facePreviewDialog').open) updateFacePreviewCaption();
+}
+
+function flushFaceGridRender() {
+  if (!faceGridRenderTimer) return;
+  clearTimeout(faceGridRenderTimer);
+  faceGridRenderTimer = null;
+  void Promise.all([renderCharacterFace(), renderCharacterFace(true)]);
+}
+
+function refreshFaceGrid() {
+  faceRenderId.left++;
+  faceRenderId.right++;
+  characterInput = '';
+  character2Input = '';
+  for (const [prefix, file] of [['character', character], ['character2', character2]]) {
+    if (!file) continue;
+    $(`${prefix}PreviewButton`).disabled = true;
+    $(`${prefix}Status`).textContent = 'Updating face…';
+  }
+  clearResults();
+  readyToGenerate();
+  clearTimeout(faceGridRenderTimer);
+  faceGridRenderTimer = character || character2 ? setTimeout(flushFaceGridRender, 180) : null;
+}
+
+function changeFaceGridSettings(patch) {
+  if (busy || running || demoLoading) return;
+  const next = normalizeFaceGridSettings({ ...faceGridSettings, ...patch });
+  if (FACE_GRID_FIELDS.every((key) => next[key] === faceGridSettings[key]) && next.color === faceGridSettings.color && next.squiggle === faceGridSettings.squiggle) return;
+  faceGridSettings = next;
+  renderFaceGridSettings();
+  try { localStorage.setItem(FACE_GRID_STORAGE_KEY, JSON.stringify(next)); $('faceGridSaveStatus').textContent = 'Saved in this browser'; }
+  catch { $('faceGridSaveStatus').textContent = 'Browser storage unavailable'; }
+  refreshFaceGrid();
+}
+
+function initFaceGridSettings() {
+  try {
+    const saved = localStorage.getItem(FACE_GRID_STORAGE_KEY);
+    if (saved) faceGridSettings = normalizeFaceGridSettings(JSON.parse(saved));
+  } catch { $('faceGridSaveStatus').textContent = 'Browser storage unavailable'; }
+  renderFaceGridSettings();
+  for (const key of FACE_GRID_FIELDS) {
+    const id = `faceGrid${key[0].toUpperCase()}${key.slice(1)}`;
+    $(`${id}Range`).oninput = () => changeFaceGridSettings({ [key]: $(`${id}Range`).value });
+    $(`${id}Range`).onchange = flushFaceGridRender;
+    $(id).onchange = () => changeFaceGridSettings({ [key]: $(id).value });
+  }
+  document.querySelectorAll('[data-grid-color]').forEach((button) => { button.onclick = () => changeFaceGridSettings({ color: button.dataset.gridColor }); });
+  $('faceGridSquiggle').onchange = () => changeFaceGridSettings({ squiggle: $('faceGridSquiggle').checked });
+  $('faceGridShuffle').onclick = () => {
+    if (busy || running || demoLoading || !faceGridSettings.squiggle) return;
+    faceGridSeeds.left = randomFaceSeed();
+    faceGridSeeds.right = randomFaceSeed();
+    refreshFaceGrid();
+  };
+  $('faceGridColorPicker').oninput = () => changeFaceGridSettings({ color: $('faceGridColorPicker').value });
+  $('faceGridColorPicker').onchange = flushFaceGridRender;
+  $('faceGridColorHex').onchange = () => {
+    const color = $('faceGridColorHex').value.trim();
+    if (/^#[\da-f]{6}$/i.test(color)) changeFaceGridSettings({ color });
+    else $('faceGridColorHex').value = faceGridSettings.color;
+  };
+  $('faceGridReset').onclick = () => {
+    changeFaceGridSettings(DEFAULT_FACE_GRID);
+    try { localStorage.removeItem(FACE_GRID_STORAGE_KEY); $('faceGridSaveStatus').textContent = 'Default grid restored'; }
+    catch { $('faceGridSaveStatus').textContent = 'Browser storage unavailable'; }
+    flushFaceGridRender();
+  };
 }
 async function loadDemo(kind = 'orange') {
   const button = $(kind === 'fictional' ? 'loadFictional' : 'loadDemo');
   const buttonLabel = button.textContent;
   $('loadDemo').disabled = true; $('loadFictional').disabled = true;
-  demoLoading = true; faceLoadId.left++; faceLoadId.right++; updateFacePicker();
+  demoLoading = true; faceLoadId.left++; faceLoadId.right++; readyToGenerate();
   button.textContent = 'Loading…'; errorText('demoError', '');
   try {
     const demo = await api('/api/apps/scene-remix/demo', { clip: kind });
@@ -348,7 +510,7 @@ async function loadDemo(kind = 'orange') {
     $('prepStatus').textContent = 'Demo loaded. A saved guide will be reused if available.';
     readyToPrepare();
   } catch (error) { errorText('demoError', error.message); }
-  finally { $('loadDemo').disabled = false; $('loadFictional').disabled = false; button.textContent = buttonLabel; demoLoading = false; updateFacePicker(); }
+  finally { $('loadDemo').disabled = false; $('loadFictional').disabled = false; button.textContent = buttonLabel; demoLoading = false; readyToGenerate(); }
 }
 async function prepare() {
   if (busy) return;
@@ -447,7 +609,6 @@ async function generate(stage) {
   errorText('draftError', '');
   try {
     if (!preparedInput || !characterInput) throw new Error('Prepare the clip and add a character first.');
-    if (unsupportedFaceSelected()) throw new Error('Seedance does not support direct real-person photos. Choose fictional portraits before generating.');
     if (!$('reviewed').checked) throw new Error('Watch and approve the prepared clip first.');
     const model = chosenModel(stage === 'draft' ? 'draftModel' : 'finalModel');
     if (!model) throw new Error('Choose a connected Seedance model.');
@@ -458,7 +619,7 @@ async function generate(stage) {
     }
     step(4); $('resultsPanel').classList.remove('hide'); readyToGenerate();
     $(stage === 'draft' ? 'makeDraft' : 'makeFinal').textContent = 'Starting…';
-    const queued = await api('/api/apps/scene-remix', { source: preparedInput, character: characterInput, character2: character2 ? character2Input : undefined, reviewed: true,
+    const queued = await api('/api/apps/scene-remix', { source: preparedInput, character: characterInput, character2: character2 ? character2Input : undefined, faceGrid: true, reviewed: true,
       videoRef: finishDraft ? undefined : $('publicUrl').value.trim(), draftTaskId: finishDraft ? draftItem.generationId : undefined,
       draft: stage === 'draft' && model.id === OPENLUX_SEEDANCE_25,
       mode: selectedMode(), scene: $('sceneDescription').value, backgroundColor: prepared.stats.backgroundColor, instruction: $('instruction').value,
@@ -485,6 +646,7 @@ async function generate(stage) {
   finally { running = false; $('makeDraft').textContent = 'Generate draft'; resolutionOptions('final'); readyToGenerate(); }
 }
 async function boot() {
+  initFaceGridSettings();
   renderFacePicker();
   try { catalog = await api('/api/apps'); }
   catch (error) { errorText('draftError', `Could not load the app: ${error.message}`); return; }
@@ -501,7 +663,10 @@ async function boot() {
   $('chooseSource').onclick = () => $('sourceFile').click(); $('replaceSource').onclick = () => $('sourceFile').click();
   $('chooseCharacter').onclick = () => $('characterFile').click(); $('replaceCharacter').onclick = () => $('characterFile').click();
   $('chooseCharacter2').onclick = () => $('character2File').click(); $('replaceCharacter2').onclick = () => $('character2File').click();
-  $('removeCharacter2').onclick = () => { const reuseGuide = !!prepared && selectedMode() === 'person-mask'; faceLoadId.right++; selectedFaces.right = null; character2 = null; character2Input = ''; if (character2Url) URL.revokeObjectURL(character2Url); character2Url = ''; $('character2File').value = ''; $('character2Drop').classList.remove('has-file'); $('character2Loaded').classList.add('hide'); if (reuseGuide) clearResults(); else clearPrepared(); updateFacePicker(); readyToPrepare(); readyToGenerate(); };
+  $('characterPreviewButton').onclick = () => previewCharacterFace();
+  $('character2PreviewButton').onclick = () => previewCharacterFace(true);
+  $('facePreviewClose').onclick = () => $('facePreviewDialog').close();
+  $('removeCharacter2').onclick = () => { const reuseGuide = !!prepared && selectedMode() === 'person-mask'; faceLoadId.right++; faceRenderId.right++; selectedFaces.right = null; character2 = null; character2Input = ''; if (character2Url) URL.revokeObjectURL(character2Url); if (character2RawUrl) URL.revokeObjectURL(character2RawUrl); character2Url = ''; character2RawUrl = ''; $('character2File').value = ''; $('character2Drop').classList.remove('has-file'); $('character2Loaded').classList.add('hide'); $('character2PreviewButton').disabled = true; $('character2Status').textContent = ''; if (reuseGuide) clearResults(); else clearPrepared(); updateFacePicker(); readyToPrepare(); readyToGenerate(); };
   $('start').oninput = () => { resetSceneDescription(true); renderRange(); };
   $('length').onchange = () => { resetSceneDescription(true); renderRange(); modelOptions(); clearPrepared(); };
   $('setStart').onclick = () => { $('start').value = $('sourcePreview').currentTime.toFixed(1); resetSceneDescription(true); renderRange(); };

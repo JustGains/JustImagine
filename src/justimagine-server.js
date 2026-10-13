@@ -5,8 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { pipeline } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { APP_BY_ID, APPS, chooseImageAppModel, chooseVideoAppModel, imageAppLabel, imageAppPrompt, videoAppPrompt } from './apps-workflows.js';
+import { APP_BY_ID, APPS, chooseImageAppModel, chooseVideoAppModel, imageAppLabel, imageAppPrompt, RMBG_MAX_IMAGES, RMBG_MODEL, videoAppPrompt } from './apps-workflows.js';
 import { generateVector, hasFfmpeg, probeMedia, processAppMedia, restoreSceneAudio, silentSceneReference } from './apps-processing.js';
+import { createRmbgEngine } from './rmbg.js';
+import { writeZip } from './zip.js';
 import { demoClipPath, demoClipVersion, ensureDemoClip } from './scene-remix-demo.js';
 import { cleanupS3References, readS3Settings, removeS3Settings, s3SettingsStatus, saveS3Settings, uploadS3Reference } from './scene-remix-s3.js';
 import { AUDIO_ENHANCE_KINDS, ENHANCE_MODEL, describeSceneBackground, enhancePrompt, generateImage, generateVideo, transcribeWords, VIDEO_KEY_API, writeStoryboard } from './justimagine-gen.js';
@@ -125,6 +127,7 @@ export const PAGE_MODULES = {
   '/assets/apps.js': 'apps.js',
   '/assets/apps-workflows.js': 'apps-workflows.js',
   '/assets/scene-remix.js': 'scene-remix.js',
+  '/assets/scene-remix-face-grid.js': 'scene-remix-face-grid.js',
   '/assets/scene-remix-editor.js': 'scene-remix-editor.js',
   '/assets/scene-remix-depth.js': 'scene-remix-depth.js',
   '/assets/scene-remix-layers.js': 'scene-remix-layers.js',
@@ -642,7 +645,11 @@ export function createJobs({ limits = LIMITS, retainMs = JOB_RETAIN_MS, retainMa
     queuedAt: j.queuedAt,
     finishedAt: j.finishedAt,
     error: j.error,
-    item: j.item
+    item: j.item,
+    // A batch app's running count, every result so far, and what it skipped.
+    progress: j.progress,
+    items: j.items,
+    failures: j.failures
   });
 
   // Finished jobs are kept so a poller can still collect them, but not forever
@@ -830,6 +837,10 @@ export function createServer({
   songApi = 'openrouter',
   // ElevenLabs' speech models; refreshed from the account once it has a key.
   voiceModels = VOICE_MODELS,
+  // Hosts with account billing can replace provider units before model facts are built.
+  presentVoiceModel = m => m,
+  // A hosted account can supply a speech engine and a fixed voice library.
+  voiceBackend = null,
   // Providers that are not image APIs — ElevenLabs — listed in Settings beside them.
   audioApis = AUDIO_APIS,
   // Design Arena's leaderboard, both categories. The one quality scale the
@@ -876,8 +887,12 @@ export function createServer({
   actor = null,
   // How a piece of song reaches OpenRouter for lip sync; see audioRelayFromEnv.
   audioRelay = audioRelayFromEnv(),
-  videoRelay = videoRelayFromEnv()
+  videoRelay = videoRelayFromEnv(),
+  // Local background removal (JustTools' justrmbg). Absent, the app is hidden.
+  rmbg = null
 }) {
+  const rmbgEngine = rmbg || createRmbgEngine();
+  const voiceApi = voiceBackend?.id || ELEVENLABS_API_ID;
   ensureRoot(root);
   ensureLibrary(charactersRoot);
 
@@ -1109,8 +1124,8 @@ export function createServer({
   // A voice line, or a script performed by several cast voices in one take.
   async function runVoiceJob(job, plan) {
     const { prompt, model, voiceMode, voice, lines, settings, language, seed, format, castNames, speakers, chars, folderFull, folderRel, batch } = plan;
-    const apiKey = keyOf(ELEVENLABS_API_ID);
-    if (!apiKey) throw new Error(`Voice needs ${apiLabel(ELEVENLABS_API_ID)} key. Add it in Settings.`);
+    const apiKey = keyOf(voiceApi);
+    if (!apiKey) throw new Error('Voice generation is temporarily unavailable.');
     const started = Date.now();
     const phase = voiceMode === 'dialogue' ? 'performing' : 'speaking';
     jobs.progress(job.id, phase);
@@ -1120,8 +1135,9 @@ export function createServer({
       elevenBusy(busy);
       jobs.progress(job.id, 'waiting for a free ElevenLabs slot');
     };
-    const out =
-      voiceMode === 'dialogue'
+    const out = voiceBackend
+      ? await voiceBackend.speak({ apiKey, voiceId: voice.id, text: lines[0].text, model, signal })
+      : voiceMode === 'dialogue'
         ? await textToDialogue({ apiKey, lines, model, stability: settings?.stability, language, seed, format, signal, onBusy })
         : await textToSpeech({ apiKey, voiceId: voice.id, text: lines[0].text, model, settings, language, seed, format, signal, onBusy });
     // Named for who speaks — the character, not the stock voice they borrow.
@@ -1137,7 +1153,7 @@ export function createServer({
       // Who speaks, in the order they first do.
       speakers: voiceMode === 'dialogue' ? speakers : undefined,
       characters: castNames?.length ? castNames : undefined,
-      api: ELEVENLABS_API_ID,
+      api: voiceApi,
       model,
       dialogue: voiceMode === 'dialogue' || undefined,
       settings: settings || undefined,
@@ -1255,7 +1271,7 @@ export function createServer({
       return { ...m, facts: mediaModelFacts(m, { kind, now, timing: timings[m.id] }), detail: mediaModelDetail(m, { kind }) };
     };
     const songReady = !!keyOf(songApi);
-    const voiceReady = !!keyOf(ELEVENLABS_API_ID);
+    const voiceReady = !!keyOf(voiceApi);
     return {
       apis: apis.map((a) => ({
         id: a.id,
@@ -1266,7 +1282,7 @@ export function createServer({
       })),
       videoModels: videoModels.map((m) => ({ ...withFacts(m, 'video'), api: videoApiOf(m), hasKey: !!keyOf(videoApiOf(m)) })),
       songModels: songModels.map((m) => ({ ...audioFacts(m, 'song'), api: songApi, hasKey: songReady })),
-      voiceModels: voiceLib.models.map((m) => ({ ...audioFacts(m, 'voice'), api: ELEVENLABS_API_ID, hasKey: voiceReady }))
+      voiceModels: voiceLib.models.map((m) => ({ ...audioFacts(presentVoiceModel(m) || m, 'voice'), api: voiceApi, hasKey: voiceReady }))
     };
   }
 
@@ -1279,6 +1295,7 @@ export function createServer({
   const voiceLib = { models: voiceModels, voices: null, at: 0, key: '' };
 
   async function voiceLibrary({ refresh = false } = {}) {
+    if (voiceBackend) return voiceBackend.voices;
     const apiKey = keyOf(ELEVENLABS_API_ID);
     if (!apiKey) throw Object.assign(new Error(`Voices need ${apiLabel(ELEVENLABS_API_ID)} key. Add it in Settings.`), { status: 400 });
     // A different key is a different account, with different voices.
@@ -1530,6 +1547,9 @@ export function createServer({
         throw badRequest('Some lines have no speaker. Start each line with a cast name ("Nora: …"), or pick a voice to narrate the rest.');
       }
       const said = lines.map((l) => ({ text: l.text, voiceId: (l.speaker ? l.speaker.voice : narrator).id, speaker: l.speaker?.name || narrator.name }));
+      if (voiceBackend && new Set(said.map((l) => l.voiceId)).size > 1) {
+        throw badRequest('This voice model reads one voice at a time. Create a separate take for each speaker.');
+      }
       const names = [...new Set(said.map((l) => l.speaker))];
       const castNames = speakers.map((c) => c.name);
       // One voice throughout is a plain read, which every model can do.
@@ -1790,6 +1810,46 @@ export function createServer({
     return { jobs: [id], kind: app.id === 'upscaler' ? 'image' : 'video', folder: folderRel, model };
   }
 
+  // One job for the whole batch: the remover runs one image at a time anyway,
+  // and a single job keeps a big batch from filling every image slot that
+  // cloud generations share. Each cutout lands in the gallery as it finishes.
+  function queueRmbgApp(inputs, folderFull, folderRel) {
+    need('images');
+    const prompt = `Remove background · ${inputs.length} ${inputs.length === 1 ? 'image' : 'images'}`;
+    const id = jobs.add({
+      by: actorOf(),
+      kind: 'image', folder: folderRel, prompt, model: RMBG_MODEL,
+      run: async (job) => {
+        job.progress = { done: 0, total: inputs.length };
+        job.items = [];
+        job.failures = [];
+        jobs.progress(job.id, rmbgEngine.status().warm ? 'processing' : 'preparing');
+        fs.mkdirSync(folderFull, { recursive: true });
+        const tasks = inputs.map((input) => {
+          const stem = input.name.replace(/\.[a-z0-9]+$/i, '') || 'image';
+          return { input: input.file, ext: EXT_BY_TYPE[input.type] || 'png', name: input.name || 'image', file: outputName(`${stem} cutout`, 'png') };
+        });
+        for (const task of tasks) task.output = path.join(folderFull, task.file);
+        await rmbgEngine.removeAll(tasks, {
+          signal: job.ctrl.signal,
+          onResult: (task, error, done) => {
+            job.progress = { done: job.progress.done + 1, total: tasks.length };
+            if (error) job.failures.push({ name: task.name, error: error.message });
+            else {
+              const entry = { file: task.file, folder: folderRel, kind: 'image', prompt: `Remove background · ${task.name}`, model: RMBG_MODEL, app: 'remove-background', bytes: fs.statSync(task.output).size, ms: done?.ms, ts: Date.now() };
+              appendHistory(folderFull, stamp(entry, job?.by));
+              job.items.push(entry);
+            }
+            jobs.progress(job.id, 'processing');
+          }
+        });
+        if (!job.items.length) throw new Error(job.failures[0]?.error || 'No backgrounds were removed.');
+        return job.items[0];
+      }
+    });
+    return { jobs: [id], kind: 'image', folder: folderRel, model: RMBG_MODEL };
+  }
+
   function queueVectorApp(prompt, folderFull, folderRel) {
     need('images');
     const api = apiById.get(enhanceApi);
@@ -1870,8 +1930,11 @@ export function createServer({
         .map((id) => videoModels.find((m) => m.id === id && videoApiOf(m) === (id === SCENE_REMIX_OPENLUX_MODEL ? 'openlux' : VIDEO_KEY_API) && !!keyOf(videoApiOf(m))))
         .filter(Boolean);
       const editReady = (model) => !SCENE_REMIX_UNAVAILABLE.has(model.id);
+      const rmbgStatus = rmbgEngine.status();
+      const rmbgReady = !generationPolicy && rmbgStatus.available;
       return {
-        apps: APPS,
+        apps: APPS.filter((app) => app.engine !== 'rmbg' || rmbgReady),
+        rmbg: rmbgReady ? { ...rmbgStatus, maxImages: RMBG_MAX_IMAGES } : null,
         recommendedImage: image ? { api: image.api.id, model: image.model.id, name: image.model.name || image.model.id } : null,
         recommendedVideo: video ? { api: video.api || VIDEO_KEY_API, model: video.id, name: video.name || video.id } : null,
         ffmpeg: hasFfmpeg(),
@@ -1958,7 +2021,7 @@ export function createServer({
       const subject = images.length === 2
         ? 'Replace the left person with the first image reference and the right person with the second image reference. Keep each person in their original position throughout.'
         : 'Replace the prominent subject with the character in the image reference.';
-      const prompt = `Edit the supplied video reference. ${subject} ${guide}${backgroundColor && !scene ? ` The source backdrop's approximate color is ${backgroundColor}.` : ''}${scene ? ` Recreate this setting: ${scene}.` : ''} Keep the source action, camera moves, cuts, timing, and composition. Keep the same people in their assigned roles across every cut. Deliver one finished clip with no captions or split screen.${instruction ? ` Requested changes: ${instruction}` : ''}`;
+      const prompt = `Edit the supplied video reference. ${subject} ${guide}${body.faceGrid === true ? ' The grid on each face reference is for alignment only. Do not show grid lines in the finished video.' : ''}${backgroundColor && !scene ? ` The source backdrop's approximate color is ${backgroundColor}.` : ''}${scene ? ` Recreate this setting: ${scene}.` : ''} Keep the source action, camera moves, cuts, timing, and composition. Keep the same people in their assigned roles across every cut. Deliver one finished clip with no captions or split screen.${instruction ? ` Requested changes: ${instruction}` : ''}`;
       return queueGeneration({ kind: 'video', folder: 'Apps/Video Remix', prompt, images, firstFrame: false,
         videoRef: draftTaskId || resumeTaskId ? undefined : body.videoRef, draftTaskId, resumeTaskId, draft, sceneSource: body.source, model: model.id, api: videoApiOf(model),
         duration, resolution, aspectRatio: String(body.aspectRatio || '16:9'), audio: false, count: 1 });
@@ -1996,6 +2059,13 @@ export function createServer({
         const input = appInput(body.input, app.engine === 'local-video' ? 'video' : 'image');
         return queueLocalApp(app, input, values, folderFull, folderRel);
       }
+      if (app.engine === 'rmbg') {
+        if (generationPolicy || !rmbgEngine.status().available) throw Object.assign(new Error('Background removal is unavailable on this server.'), { status: 400 });
+        const ids = [...new Set(Array.isArray(body.inputs) ? body.inputs.map(String) : body.input ? [String(body.input)] : [])];
+        if (!ids.length) throw badRequest('Add at least one image.');
+        if (ids.length > RMBG_MAX_IMAGES) throw badRequest(`Remove backgrounds from up to ${RMBG_MAX_IMAGES} images at a time.`);
+        return queueRmbgApp(ids.map((id) => appInput(id, 'image')), folderFull, folderRel);
+      }
       if (app.engine === 'vector') {
         const prompt = String(values.prompt || '').trim().slice(0, 1200);
         if (!prompt) throw Object.assign(new Error('Describe the vector illustration.'), { status: 400 });
@@ -2020,8 +2090,8 @@ export function createServer({
         ...modelsPayload(),
         videoReady: videoReady(),
         songReady: !!keyOf(songApi),
-        voiceReady: !!keyOf(ELEVENLABS_API_ID),
-        voiceFormats: VOICE_FORMATS,
+        voiceReady: !!keyOf(voiceApi),
+        voiceFormats: voiceBackend ? ['mp3'] : VOICE_FORMATS,
         countMax: COUNT_MAX,
         // The ✨ button rides on the same OpenRouter key as video.
         enhanceReady: !!keyOf(enhanceApi),
@@ -2627,17 +2697,19 @@ export function createServer({
     // gallery. The editor uses it to audition a cast member's voice and settings.
     async 'POST /api/voices/say'(req) {
       const body = await readJsonBody(req);
-      const apiKey = keyOf(ELEVENLABS_API_ID);
-      if (!apiKey) throw badRequest(`Voice needs ${apiLabel(ELEVENLABS_API_ID)} key. Add it in Settings.`);
+      const apiKey = keyOf(voiceApi);
+      if (!apiKey) throw badRequest('Voice generation is temporarily unavailable.');
       const voiceId = String(body.voice?.id ?? body.voice ?? '').trim();
       if (!voiceId) throw badRequest('Which voice? Send { voice: "<voice id>" }.');
       const text = String(body.text || '').trim().slice(0, 300) || 'Hello there. This is how I sound. Does this feel right for me?';
       const model = String(body.model || voiceLib.models[0]?.id || DEFAULT_VOICE_MODEL);
-      const plan = { kind: 'voice', model, api: audioApiById.get(ELEVENLABS_API_ID), count: 1, chars: text.length };
+      const plan = { kind: 'voice', model, api: voiceBackend ? { id: voiceApi } : audioApiById.get(ELEVENLABS_API_ID), count: 1, chars: text.length };
       generationPolicy?.validate?.(plan);
       const ticket = generationPolicy?.reserve([plan])?.[0];
       const out = await withTimeout(60_000, (signal) =>
-        executeReserved(ticket, () => textToSpeech({ apiKey, voiceId, text, model, settings: voiceSettings(body.settings || {}, model), signal, onBusy: elevenBusy }))
+        executeReserved(ticket, () => voiceBackend
+          ? voiceBackend.speak({ apiKey, voiceId, text, model, signal })
+          : textToSpeech({ apiKey, voiceId, text, model, settings: voiceSettings(body.settings || {}, model), signal, onBusy: elevenBusy }))
       );
       return { dataUrl: `data:audio/mpeg;base64,${out.buf.toString('base64')}`, chars: out.characters || text.length };
     },
@@ -2891,6 +2963,20 @@ export function createServer({
         return;
       }
 
+      // Every cutout from one Remove Background run, in one download.
+      if (method === 'GET' && url.pathname === '/api/apps/remove-background/zip') {
+        const job = jobs.read([String(url.searchParams.get('job') || '')]).jobs[0];
+        const items = (job?.items || []).filter((item) => item.app === 'remove-background');
+        if (!items.length) throw Object.assign(new Error('Those results are no longer listed here. Find them in the gallery.'), { status: 404 });
+        const files = items.map((item) => ({ name: item.file, path: resolveFile(root, item.folder, item.file).full })).filter((f) => fs.existsSync(f.path));
+        if (!files.length) throw Object.assign(new Error('Those results were moved or deleted.'), { status: 404 });
+        if (files.reduce((sum, f) => sum + fs.statSync(f.path).size, 0) > 3.5 * 1024 ** 3) throw Object.assign(new Error('That batch is too large for one download. Open it in the gallery.'), { status: 413 });
+        res.writeHead(200, { 'content-type': 'application/zip', 'cache-control': 'no-store', 'content-disposition': 'attachment; filename="background-removed.zip"' });
+        await writeZip(res, files);
+        res.end();
+        return;
+      }
+
       if (method === 'GET' && url.pathname === '/api/apps/scene-remix/reference') {
         const id = url.searchParams.get('source');
         const input = appInput(id, 'video');
@@ -2927,6 +3013,7 @@ export function createServer({
 
   server.jobs = jobs;
   server.planGeneration = planGeneration;
+  if (!rmbg) server.on('close', () => rmbgEngine.close());
   if (configPath) {
     const sweep = () => cleanupS3References(configPath).catch(() => {});
     const timer = setInterval(sweep, 30 * 60_000);

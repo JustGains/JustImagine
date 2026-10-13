@@ -264,6 +264,10 @@ test('delivery settings are sent in ElevenLabs terms, and only when set', () => 
   expect(voiceSettings({ stability: 0.1 }, 'eleven_v3')).toEqual({ stability: 0 });
   expect(voiceSettings({ stability: 0.6 }, 'eleven_v3')).toEqual({ stability: 0.5 });
   expect(voiceSettings({ stability: 0.9 }, 'eleven_v3')).toEqual({ stability: 1 });
+  expect(voiceSettings({ stability: 0.55, similarity: 0.7, style: 0.6, speed: 1.2, speakerBoost: true }, 'eleven_v4')).toEqual({
+    stability: 0.55,
+    similarity_boost: 0.7
+  });
 });
 
 test('speech goes to the voice named, with the key, format and settings asked for', async () => {

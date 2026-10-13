@@ -12,7 +12,7 @@ import { createServer, listenOnFreePort } from './justimagine-server.js';
 const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
 
 test('the catalog has a unique, usable route for every app', () => {
-  expect(APPS).toHaveLength(15);
+  expect(APPS).toHaveLength(16);
   expect(new Set(APPS.map((app) => app.id)).size).toBe(APPS.length);
   expect(APPS.every((app) => app.title && app.summary && app.engine && app.input)).toBe(true);
   expect(APPS.every((app) => app.icon && app.gradient?.length === 2 && app.gradient.every((stop) => /^#[0-9a-f]{6}$/i.test(stop)))).toBe(true);
@@ -133,7 +133,7 @@ test('a temporary image upload runs a guided edit and saves only its result in t
   try {
     expect((await fetch(base + '/apps/change-age')).status).toBe(200);
     const appList = await (await fetch(base + '/api/apps')).json();
-    expect(appList.apps).toHaveLength(15);
+    expect(appList.apps).toHaveLength(16);
     const started = await post('/api/media', { name: 'portrait.png', size: PNG.length, temporary: true });
     const chunk = await fetch(`${base}/api/media/chunk?id=${started.data.id}&offset=0`, { method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: PNG });
     expect(chunk.status).toBe(200);

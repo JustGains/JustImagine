@@ -311,12 +311,29 @@ export const VOICE_MODELS = [
     id: 'eleven_v3',
     name: 'Eleven v3',
     description:
-      'The most expressive model: reads audio tags like [whispers], [laughs] or [sighs] as direction, 70+ languages, and the only one that performs a dialogue between several voices in one take.',
+      'Expressive speech with audio tags and multi-speaker dialogue in more than 70 languages.',
     credits: 1,
     maxChars: 5000,
     languages: 70,
     tags: true,
     dialogue: true
+  },
+  {
+    id: 'eleven_v4',
+    name: 'Eleven v4',
+    description: 'Expressive speech in more than 90 languages, with audio tags and multi-speaker dialogue.',
+    credits: 1,
+    maxChars: 10000,
+    languages: 90,
+    tags: true,
+    dialogue: true
+  },
+  {
+    id: 'eleven_v3_conversational',
+    name: 'Eleven v3 Conversational',
+    description: 'Responsive, expressive speech with audio tags.',
+    credits: 0.5,
+    tags: true
   },
   {
     id: 'eleven_multilingual_v2',
@@ -508,10 +525,10 @@ export function voiceSettings({ stability, similarity, style, speed, speakerBoos
   const sim = unit(similarity);
   if (sim != null) out.similarity_boost = sim;
   const st = unit(style);
-  if (st != null) out.style = st;
+  if (st != null && model !== 'eleven_v4') out.style = st;
   const sp = Number(speed);
-  if (speed !== '' && speed != null && Number.isFinite(sp)) out.speed = Math.min(Math.max(sp, 0.7), 1.2);
-  if (typeof speakerBoost === 'boolean') out.use_speaker_boost = speakerBoost;
+  if (model !== 'eleven_v4' && speed !== '' && speed != null && Number.isFinite(sp)) out.speed = Math.min(Math.max(sp, 0.7), 1.2);
+  if (model !== 'eleven_v4' && typeof speakerBoost === 'boolean') out.use_speaker_boost = speakerBoost;
   return Object.keys(out).length ? out : undefined;
 }
 

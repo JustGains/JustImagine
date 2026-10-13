@@ -2482,7 +2482,7 @@
         : mode === 'song'
           ? "cost: OpenRouter's list price, per song or per clip"
           : mode === 'voice'
-            ? 'cost: ElevenLabs credits per character of text'
+            ? state.hosted ? 'cost: account credits per 1,000 characters of text' : 'cost: ElevenLabs credits per character of text'
             : "cost: per image, from each provider's list prices",
       avail.has('quality') ? 'quality: Design Arena head-to-head rank' : null,
       avail.has('speed')
@@ -2793,13 +2793,30 @@
     const p = modelSpec()?.pricing;
     let cost = null;
     const out = $('goCost');
+    if (state.hosted && isVideoMode() && Number.isFinite(modelSpec()?.credits)) {
+      const model = modelSpec();
+      const seconds = Number(durSel.value) || model.durations?.[0] || 0;
+      const credits = model.credits * (model.perSecond ? seconds : 1) * Math.min(count, countMax());
+      out.textContent = credits ? `≈ ${credits.toLocaleString()} cr` : '';
+      out.title = credits ? `${credits.toLocaleString()} account credits for this video request` : '';
+      return;
+    }
     // ElevenLabs bills credits, not dollars: say how many this will use.
     if (mode === 'voice') {
       const chars = promptEl.value.trim().length;
-      const rate = modelSpec()?.credits;
-      const credits = chars && Number.isFinite(rate) ? Math.ceil(chars * rate * Math.min(count, countMax())) : 0;
+      const model = modelSpec();
+      const rate = model?.credits;
+      const takes = Math.min(count, countMax());
+      const credits = chars && Number.isFinite(rate) ? model.billing === 'perCall'
+        ? rate * takes
+        : state.hosted ? Math.max(1, Math.ceil(chars * rate / 1000)) * takes
+        : Math.ceil(chars * rate * takes) : 0;
       out.textContent = credits ? `≈ ${credits.toLocaleString()} cr` : '';
-      out.title = credits ? `About ${credits.toLocaleString()} ElevenLabs credits (${chars.toLocaleString()} characters × ${rate})` : '';
+      out.title = credits ? model.billing === 'perCall'
+        ? `${credits.toLocaleString()} account credits for ${Math.min(count, countMax())} speech take${count === 1 ? '' : 's'}`
+        : state.hosted
+          ? `${credits.toLocaleString()} account credits for ${chars.toLocaleString()} characters across ${takes} speech take${takes === 1 ? '' : 's'}`
+          : `About ${credits.toLocaleString()} ElevenLabs credits (${chars.toLocaleString()} characters × ${rate})` : '';
       return;
     }
     if (mode === 'song') {
@@ -3168,9 +3185,12 @@
       $(d.out).textContent = shown;
     }
     $('dlStyleRow').classList.toggle('hide', !spec?.style);
+    $('dlSpeedRow').classList.toggle('hide', currentModel() === 'eleven_v4');
     $('dlNote').textContent = v3
-      ? 'Eleven v3 reads stability in three steps (Creative, Natural, Robust) and takes its direction from audio tags. Sliders you leave alone keep the voice’s own settings.'
-      : 'Untouched sliders keep the voice’s own settings. Drag one to take over.';
+      ? 'Eleven v3 reads stability in three steps (Creative, Natural, Robust). Untouched sliders keep the voice’s settings.'
+      : currentModel() === 'eleven_v4'
+        ? 'Eleven v4 uses stability and similarity. Untouched sliders keep the voice’s settings.'
+        : 'Untouched sliders keep the voice’s settings. Drag one to change it.';
     $('deliveryBtn').classList.toggle('on', set > 0);
     $('deliveryLabel').textContent = set ? `Delivery · ${set}` : 'Delivery';
   }
@@ -3418,7 +3438,9 @@
   // round trip through your downloads folder.
   async function useAsRef(item) {
     try {
-      const blob = await (await fetch(mediaUrl(item))).blob();
+      const response = await fetch(mediaFetchUrl(item));
+      if (!response.ok) throw new Error('The image is unavailable.');
+      const blob = await response.blob();
       if (await addImageFile(new File([blob], item.file, { type: blob.type || 'image/png' }))) {
         toast('Attached. It goes along with the next generation.');
         promptEl.focus();
@@ -4599,6 +4621,7 @@
   // the folder itself or anything below it.
   const inView = (rel) => !folder || rel === folder || String(rel).startsWith(folder + '/');
   const mediaUrl = (it, dl) => '/media/' + encodeURIComponent(it.file) + '?f=' + encodeURIComponent(it.folder ?? folder) + (dl ? '&dl=1' : '');
+  const mediaFetchUrl = (it) => mediaUrl(it) + '&raw=1';
   const thumbUrl = (it) => '/thumb/' + encodeURIComponent(it.file) + '?f=' + encodeURIComponent(it.folder ?? folder);
 
   // Geometry the height estimates are built from. They mirror the CSS: a card
@@ -5350,7 +5373,9 @@
   async function drawWave(item) {
     const Ctx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
     if (!Ctx) return null;
-    const bytes = await (await fetch(mediaUrl(item))).arrayBuffer();
+    const response = await fetch(mediaFetchUrl(item));
+    if (!response.ok) return null;
+    const bytes = await response.arrayBuffer();
     const decoded = await new Ctx(1, 2, 44100).decodeAudioData(bytes);
     return waveCanvas(decoded.getChannelData(0), item.kind === 'voice');
   }

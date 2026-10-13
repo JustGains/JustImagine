@@ -442,7 +442,13 @@ export function mediaModelFacts(model, { kind = 'image', now = Date.now(), timin
   const borrowedPrice = pricedFrom ? `. This is OpenRouter's list price for ${pricedFrom}; this provider may charge differently` : '';
   const borrowedScore = model?.factsFrom ? `, measured on ${model.factsFrom}, the same model at OpenRouter` : '';
   const p = model?.pricing || {};
-  if (kind === 'video' && p.perSecond != null) {
+  if (kind === 'video' && model?.perSecond && Number.isFinite(model?.credits)) {
+    facts.cost = {
+      rating: model.credits <= 5 ? 1 : model.credits <= 10 ? 2 : 3,
+      label: `${model.credits} cr/s`,
+      title: `${model.credits} account credits per second of video. The final quote includes the clip length and number of takes.`
+    };
+  } else if (kind === 'video' && p.perSecond != null) {
     const rating = videoCostRating(p.perSecond);
     const basis = p.basis ? ` at ${p.basis}` : '';
     facts.cost = {
@@ -467,6 +473,18 @@ export function mediaModelFacts(model, { kind = 'image', now = Date.now(), timin
       rating: imageCostRating(each),
       label: `${formatCents(each)}/${p.perSong != null ? 'song' : 'clip'}`,
       title: `${formatCents(each)} per ${what} (${p.source || 'list price'})`
+    };
+  } else if (kind === 'voice' && model?.provider === 'elevenlabs' && Number.isFinite(model?.credits)) {
+    facts.cost = {
+      rating: model.credits <= 8 ? 1 : model.credits <= 15 ? 2 : 3,
+      label: `${model.credits} cr/1k`,
+      title: `${model.credits} account credits per 1,000 characters of speech. A short take costs at least one credit.`
+    };
+  } else if (kind === 'voice' && model?.billing === 'perCall' && Number.isFinite(model?.credits)) {
+    facts.cost = {
+      rating: model.credits <= 10 ? 1 : model.credits <= 25 ? 2 : 3,
+      label: `${model.credits} cr/take`,
+      title: `${model.credits} account credits per speech take, up to ${Number(model.maxChars || 4096).toLocaleString()} characters.`
     };
   } else if (kind === 'voice' && Number.isFinite(model?.credits)) {
     // ElevenLabs bills credits from a subscription, not dollars per call, so

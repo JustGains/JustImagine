@@ -24,6 +24,7 @@ export const APPS = [
   { id: 'expand-image', title: 'Expand Image', summary: 'Make room around the original image.', category: 'Image', engine: 'image', input: 'image', icon: 'expand', gradient: TILE_GRADIENTS.cyan },
   { id: 'remove-object', title: 'Remove Object', summary: 'Erase a person or object and fill the space.', category: 'Image', engine: 'image', input: 'image', icon: 'eraser', gradient: TILE_GRADIENTS.coral },
   { id: 'remove-light', title: 'Remove Light', summary: 'Soften glare, harsh shadows, or blown highlights.', category: 'Image', engine: 'image', input: 'image', icon: 'sun', gradient: TILE_GRADIENTS.gold },
+  { id: 'remove-background', title: 'Remove Background', summary: 'Cut the background out of a whole batch of images at once.', category: 'Image', engine: 'rmbg', input: 'images', icon: 'cutout', gradient: TILE_GRADIENTS.blue },
   { id: 'upscaler', title: 'Upscaler', summary: 'Make an image larger with a clean, sharp finish.', category: 'Image', engine: 'local-image', input: 'image', icon: 'upscale', gradient: TILE_GRADIENTS.green },
   { id: 'video-generator', title: 'Video Generator', summary: 'Turn a scene idea or image into a clip.', category: 'Video', engine: 'video', input: 'optional-image', icon: 'video', gradient: TILE_GRADIENTS.blue },
   { id: 'video-remix', title: 'Video Remix', summary: 'Change the subject in a clip and keep its original sound.', category: 'Video', engine: 'scene-video', input: 'video', icon: 'swap', gradient: TILE_GRADIENTS.coral },
@@ -33,6 +34,13 @@ export const APPS = [
 ];
 
 export const APP_BY_ID = Object.fromEntries(APPS.map((app) => [app.id, app]));
+// Apps that run only where their local tool is installed; the catalogue leaves
+// them out everywhere else.
+export const OPTIONAL_ENGINES = ['rmbg'];
+export const RMBG_MODEL = 'BRIA RMBG-2.0';
+// One run's images. Each is uploaded on its own, so this bounds a batch's
+// temporary disk and its single download.
+export const RMBG_MAX_IMAGES = 200;
 export const APP_CATEGORIES = ['All', 'Image', 'Video', 'Face'];
 
 const clean = (value, max = 800) => String(value ?? '').trim().slice(0, max);

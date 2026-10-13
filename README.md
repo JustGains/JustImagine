@@ -57,6 +57,18 @@ FFprobe; install those commands before using these three apps. Upscaler uses
 Lanczos scaling with optional sharpening. Audio Fixer reduces noise and levels
 the track. These local processing apps are available in standalone JustImagine.
 
+**Remove Background** appears only where JustTools' `justrmbg` is installed
+(on `PATH`, or named by `JUSTIMAGINE_RMBG`; set it to `off` to hide the app).
+Drop up to 200 images at once. Each becomes a transparent PNG in the gallery as
+it finishes, and **Download all** saves the batch as one ZIP. One resident
+`justrmbg --serve` process keeps BRIA RMBG-2.0 loaded for every batch and stops
+after a few idle minutes. Releases without `--serve` fall back to one batch run
+per request. The first run downloads the model, about 1 GB. In a container,
+JustImagine runs the remover on the CPU, holds it to the CPU quota at low priority,
+and stops it after 3 idle minutes. `JUSTIMAGINE_RMBG_CACHE` keeps the download
+on a volume. `JUSTIMAGINE_RMBG_PROVIDER` and `JUSTIMAGINE_RMBG_IDLE_SECONDS`
+override the provider and the idle timeout.
+
 **Video Remix** at `/apps/video-remix` accepts a clip and one or two character
 images. Chrome and Edge prepare a 24 fps guide in the browser with a self-hosted
 Depth Anything V2 model and a local person mask. The people become depth shapes

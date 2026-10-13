@@ -245,6 +245,15 @@ test('a gallery model row gets display-ready facts, blank where nothing is known
   expect(mediaModelFacts({ id: 'gpt-image-1' }, { kind: 'image', now: NOW })).toEqual({ age: null, cost: null, speed: null, quality: null });
 });
 
+test('account video and speech facts use the quoted credit unit', () => {
+  const video = mediaModelFacts({ id: 'grok-imagine-video', credits: 8, perSecond: true }, { kind: 'video' });
+  const voice = mediaModelFacts({ id: 'gpt-4o-mini-tts', credits: 25, billing: 'perCall', maxChars: 4096 }, { kind: 'voice' });
+  const eleven = mediaModelFacts({ id: 'eleven_v4', provider: 'elevenlabs', credits: 15 }, { kind: 'voice' });
+  expect(video.cost.label).toBe('8 cr/s');
+  expect(voice.cost.label).toBe('25 cr/take');
+  expect(eleven.cost.label).toBe('15 cr/1k');
+});
+
 test('a catalogue description becomes a couple of plain sentences', () => {
   // Markdown links keep their text and lose their target.
   expect(cleanDescription('Wan 3.0 Prime is a variant of [Wan 3.0](https://openrouter.ai/x) from Alibaba. It does image-to-video.')).toBe(
