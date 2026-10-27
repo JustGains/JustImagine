@@ -133,7 +133,10 @@ test('a temporary image upload runs a guided edit and saves only its result in t
   try {
     expect((await fetch(base + '/apps/change-age')).status).toBe(200);
     const appList = await (await fetch(base + '/api/apps')).json();
-    expect(appList.apps).toHaveLength(16);
+    // Remove Background needs a local background-removal engine; it is listed only where one is installed.
+    const listed = appList.apps.map((app) => app.id);
+    expect(listed).toEqual(expect.arrayContaining(APPS.filter((app) => app.engine !== 'rmbg').map((app) => app.id)));
+    expect(listed.length).toBe(APPS.length - (listed.includes('remove-background') ? 0 : 1));
     const started = await post('/api/media', { name: 'portrait.png', size: PNG.length, temporary: true });
     const chunk = await fetch(`${base}/api/media/chunk?id=${started.data.id}&offset=0`, { method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: PNG });
     expect(chunk.status).toBe(200);
