@@ -636,7 +636,8 @@ test('a generated image can be promoted into a character reference', async () =>
 
 test('a character reference request cannot escape the library', async () => {
   await post('/api/characters', { name: 'Nora' });
-  expect((await get('/charref/x.png?c=' + encodeURIComponent('../..'))).status).toBe(500);
+  expect((await get('/charref/x.png?c=' + encodeURIComponent('../..'))).status).toBe(404);
+  expect((await get('/charref/x.png?c=' + encodeURIComponent('nora:../..'))).status).toBe(404);
   expect((await get('/charref/' + encodeURIComponent('../character.json') + '?c=nora')).status).toBe(404);
 });
 
@@ -733,6 +734,79 @@ test('an already-seeded character draws more angles instead of a fresh face', as
   const chats = upstreamBodies.map((b) => JSON.parse(b)).filter((b) => b.model === 'google/gemini-3.1-flash-image');
   expect(chats.every((b) => Array.isArray(b.messages[0].content))).toBe(true);
   expect(job.item.files.length).toBe(5);
+});
+
+test('a new version is imagined as takes drawn from the main look', async () => {
+  keys.openrouter = 'or-key';
+  await post('/api/characters', { name: 'Nora', description: 'freckles' });
+  await post('/api/characters/refs', { id: 'nora', dataUrl: 'data:image/png;base64,' + PNG.toString('base64') });
+  const made = await post('/api/characters/versions', { id: 'nora', name: 'Spooky', description: 'a pale Halloween ghoul' });
+  expect(made.status).toBe(200);
+  expect(made.body.version.key).toBe('nora:spooky');
+  expect((await post('/api/characters/versions', { id: 'nora', name: 'spooky' })).status).toBe(400);
+
+  const started = await post('/api/characters/refs/generate', { id: 'nora', version: 'spooky' });
+  expect(started.body).toMatchObject({ takes: true, count: 4 });
+  const [job] = await watchJobs([started.body.job]);
+  expect(job.status).toBe('done');
+  expect(job.characterId).toBe('nora:spooky');
+  expect(job.item.files.length).toBe(4);
+
+  // Every take carried the main look's picture and the new look's words.
+  const chats = upstreamBodies.map((b) => JSON.parse(b)).filter((b) => b.model === 'google/gemini-3.1-flash-image');
+  expect(chats.length).toBe(4);
+  for (const b of chats) {
+    expect(b.messages[0].content.filter((p) => p.type === 'image_url').length).toBe(1);
+    expect(JSON.stringify(b)).toContain('a pale Halloween ghoul');
+  }
+  const nora = (await getJson('/api/characters')).characters[0];
+  expect(nora.candidates).toEqual([]);
+  expect(nora.versions[0].candidates.length).toBe(4);
+
+  const kept = await post('/api/characters/refs/keep', { id: 'nora:spooky', files: nora.versions[0].candidates.slice(0, 1) });
+  expect(kept.body.version.refs.length).toBe(1);
+  expect(kept.body.character.refs.length).toBe(1);
+  // Once it has a picture of its own, the next set is more angles of it.
+  const more = await post('/api/characters/refs/generate', { id: 'nora:spooky', count: 5 });
+  expect(more.body).toMatchObject({ takes: false, count: 5 });
+});
+
+test('a version picked for a generation sends its own pictures and description', async () => {
+  await post('/api/characters', { name: 'Nora', description: 'freckles, green field jacket' });
+  await post('/api/characters/refs', { id: 'nora', dataUrl: charDataUrl(1) });
+  await post('/api/characters/versions', { id: 'nora', name: 'Spooky', description: 'a pale Halloween ghoul' });
+  await post('/api/characters/refs', { id: 'nora', version: 'spooky', dataUrl: charDataUrl(2) });
+  await post('/api/characters/refs', { id: 'nora:spooky', dataUrl: charDataUrl(3) });
+
+  const { body } = await post('/api/generate', { kind: 'image', folder: '', prompt: '@Nora (Spooky) in a graveyard', model: 'gpt-image-1', characters: ['nora:spooky'] });
+  const [job] = await watchJobs(body.jobs);
+  expect(job.status).toBe('done');
+  expect(job.characters).toEqual(['Nora (Spooky)']);
+  const sent = lastUpstreamBody();
+  expect(sent).toContain('Nora in a graveyard');
+  expect(sent).toContain('a pale Halloween ghoul');
+  expect(sent).not.toContain('freckles');
+  expect(listItems(root, '')[0].refs).toBe(2);
+});
+
+test('a look saved as its own character merges into a version', async () => {
+  await post('/api/characters', { name: 'Nora' });
+  await post('/api/characters', { name: 'Nora (Mystery)', description: 'a mystery cartoon' });
+  await post('/api/characters/refs', { id: 'nora-mystery', dataUrl: charDataUrl(1) });
+  const merged = await post('/api/characters/merge', { from: 'nora-mystery', into: 'nora' });
+  expect(merged.status).toBe(200);
+  expect(merged.body.version).toMatchObject({ key: 'nora:mystery', name: 'Mystery', description: 'a mystery cartoon' });
+  expect(merged.body.version.refs.length).toBe(1);
+  expect((await getJson('/api/characters')).characters.map((c) => c.id)).toEqual(['nora']);
+  // The picture is served from its new home.
+  expect((await get(`/charref/${merged.body.version.refs[0]}?c=nora:mystery`)).status).toBe(200);
+  expect((await post('/api/characters/merge', { from: 'nora', into: 'nora' })).status).toBe(400);
+
+  const renamed = await post('/api/characters/versions/update', { id: 'nora', version: 'mystery', name: 'Cartoon' });
+  expect(renamed.body.version.key).toBe('nora:cartoon');
+  const gone = await post('/api/characters/versions/delete', { id: 'nora', version: 'cartoon' });
+  expect(gone.body.removed).toBe(true);
+  expect(gone.body.character.versions).toEqual([]);
 });
 
 test('the shots can be kept, and the rest thrown away', async () => {

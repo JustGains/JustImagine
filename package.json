@@ -20,6 +20,7 @@
     "./models": "./src/models.js",
     "./openlux": "./src/openlux.js",
     "./ui": "./src/ui.js",
+    "./credits": "./src/credit-pricing.js",
     "./package.json": "./package.json"
   },
   "files": ["bin", "src", "skills", "docs", "scripts", "models.json", "video-models.json", "README.md", "LICENSE"],

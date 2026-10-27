@@ -339,10 +339,60 @@
     if (e.target.classList && e.target.classList.contains('sh-scrim')) { var a = e.target.closest('.sh-app'); if (a) a.removeAttribute('data-nav-open'); }
   });
 
+  /* ---------- account credits, shared across every app and teammate ---------- */
+  var creditBadge, creditDetails, creditState, creditEnabled = false;
+  var drawCredits = function () {
+    if (!creditBadge || !creditState) return;
+    var b = creditState;
+    creditBadge.textContent = b.available.toLocaleString() + ' credits';
+    creditBadge.title = 'Shared account balance. Renews ' + new Date(b.resetsAt).toLocaleDateString();
+    if (creditDetails && creditDetails.open) {
+      creditDetails.querySelector('[data-credit-details]').innerHTML = '<p><b>' + b.available.toLocaleString() + ' credits available</b></p><p>' + b.monthlyAllowance.toLocaleString() + ' credits each month, shared across your team and apps.</p><p>' + b.used.toLocaleString() + ' used · ' + b.reserved.toLocaleString() + ' reserved for running requests.</p><p>Renews ' + esc(new Date(b.resetsAt).toLocaleString()) + '. Unused monthly credits expire.</p>';
+    }
+  };
+  var refreshCredits = function () {
+    if (!creditBadge || doc.hidden && creditState) return Promise.resolve();
+    return fetch('/api/credits', { credentials: 'same-origin', cache: 'no-store' }).then(function (r) { if (!r.ok) throw new Error(); return r.json(); }).then(function (d) { creditState = d.billing; drawCredits(); }).catch(function () { creditBadge.textContent = 'Credits unavailable'; });
+  };
+  var mountCredits = function () {
+    if (!inSuite()) return;
+    session().then(function (s) {
+      if (!s || !s.creditMode) return;
+      creditEnabled = true;
+      creditBadge = doc.createElement('button');
+      creditBadge.type = 'button'; creditBadge.className = 'sh-credit-badge'; creditBadge.textContent = 'Loading credits…';
+      var sidebar = doc.querySelector('.sh-sidebar, .sidebar');
+      var brand = doc.querySelector('sh-brand, .jp-brand, .jm-brand, sh-switcher');
+      if (sidebar) sidebar.appendChild(creditBadge); else if (brand) brand.insertAdjacentElement('afterend', creditBadge); else return;
+      creditBadge.onclick = function () {
+        if (!creditDetails) {
+          creditDetails = doc.createElement('dialog'); creditDetails.className = 'sh-credit-dialog';
+          creditDetails.setAttribute('aria-label', 'Account credits');
+          creditDetails.innerHTML = '<h2>Account credits</h2><div data-credit-details></div><form method="dialog"><button class="sh-btn">Close</button></form>';
+          doc.body.appendChild(creditDetails);
+        }
+        creditDetails.showModal(); drawCredits(); refreshCredits();
+      };
+      refreshCredits();
+      setInterval(refreshCredits, 15000);
+      doc.addEventListener('visibilitychange', refreshCredits);
+      window.addEventListener('focus', refreshCredits);
+    });
+  };
+  if (doc.readyState === 'loading') doc.addEventListener('DOMContentLoaded', mountCredits); else mountCredits();
+
   /* ---------- shortcut hints: ⌘K on Apple devices, Ctrl K elsewhere ---------- */
   var isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
   var fixHints = function () { if (isMac) return; doc.querySelectorAll('kbd').forEach(function (k) { if (k.textContent === '⌘K') k.textContent = 'Ctrl K'; }); };
   if (doc.readyState === 'loading') doc.addEventListener('DOMContentLoaded', fixHints); else fixHints();
 
-  window.SH = { version: 1, icon: icon, glyph: glyph, mark: MARK, brand: function () { return brand; }, text: text, toast: toast, command: command, openPalette: openPalette, setTheme: setTheme, getTheme: getTheme, isDark: isDark, session: session, signOut: signOut, escape: esc };
+  var formatCost = function (usd) {
+    if (creditEnabled) {
+      if (!creditState) return 'Credit quote unavailable';
+      var count = Math.max(0, Math.ceil(usd * creditState.creditsPerUsd - 1e-9));
+      return count.toLocaleString() + (count === 1 ? ' credit' : ' credits');
+    }
+    return '$' + Number(usd).toFixed(usd < 1 ? 3 : 2);
+  };
+  window.SH = { version: 1, formatCost: formatCost, icon: icon, glyph: glyph, mark: MARK, brand: function () { return brand; }, text: text, toast: toast, command: command, openPalette: openPalette, setTheme: setTheme, getTheme: getTheme, isDark: isDark, session: session, signOut: signOut, escape: esc };
 })();

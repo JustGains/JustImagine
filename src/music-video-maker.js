@@ -578,7 +578,9 @@ function createMaker() {
     const box = panel.querySelector('[data-cost]');
     if (!box || !form) return;
     const e = estimate(form);
-    box.innerHTML = cloud()
+    box.innerHTML = state.billing?.mode === 'credits'
+      ? `About <b>${Math.ceil(e.usd * state.billing.creditsPerUsd - 1e-9).toLocaleString()} credits</b>${e.complete ? '' : ', plus models with no listed price,'} for ${plural(e.shots, 'shot')} and ${clock(e.seconds)} of video.`
+      : cloud()
       ? `${plural(e.shots, 'shot')}, about ${clock(e.seconds)} of video.`
       : `About <b>${money(e.usd)}</b>${e.complete ? '' : ', plus models with no listed price,'} for ${plural(e.shots, 'shot')} and ${clock(e.seconds)} of video. You pay your provider directly.`;
   }
@@ -734,7 +736,7 @@ function createMaker() {
       const cost = P.estimateCost({ shots, imagePricing: s.image.pricing, videoPricing: s.lip.pricing, resolution: s.resolution, newSong: false }).usd;
       // A song that came out much longer than asked for costs more; say so first.
       if (!cloud() && project.estimate && cost > project.estimate * 1.3 + 0.5 && !project.approvedCost) {
-        if (!confirm(`The song is ${clock(song.duration)}, longer than planned. The video will cost about ${money(cost)}. Keep going?`)) throw abortError();
+        if (!confirm(`The song is ${clock(song.duration)}, longer than planned. The video will cost about ${state.billing?.mode === 'credits' ? Math.ceil(cost * state.billing.creditsPerUsd - 1e-9).toLocaleString() + ' credits' : money(cost)}. Keep going?`)) throw abortError();
         project.approvedCost = cost;
       }
       project.shots = shots.map((x) => ({ ...x }));

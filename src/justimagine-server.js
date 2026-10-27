@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { APP_BY_ID, APPS, chooseImageAppModel, chooseVideoAppModel, imageAppLabel, imageAppPrompt, RMBG_MAX_IMAGES, RMBG_MODEL, videoAppPrompt } from './apps-workflows.js';
 import { generateVector, hasFfmpeg, probeMedia, processAppMedia, restoreSceneAudio, silentSceneReference } from './apps-processing.js';
 import { createRmbgEngine } from './rmbg.js';
+import { presentCreditModel } from './credit-display.js';
 import { writeZip } from './zip.js';
 import { demoClipPath, demoClipVersion, ensureDemoClip } from './scene-remix-demo.js';
 import { cleanupS3References, readS3Settings, removeS3Settings, s3SettingsStatus, saveS3Settings, uploadS3Reference } from './scene-remix-s3.js';
@@ -61,17 +62,25 @@ import {
   clearCandidates,
   composePrompt,
   createCharacter,
+  createVersion,
   deleteCharacter,
   deleteRef,
+  deleteVersion,
   ensureLibrary,
   exportCast,
   importCast,
   getCharacter,
+  getLook,
   keepCandidates,
   listCharacters,
+  lookKey,
+  mergeIntoVersion,
   resolveCandidate,
   resolveCharacters,
-  updateCharacter
+  splitKey,
+  updateCharacter,
+  updateVersion,
+  versionShots
 } from './justimagine-characters.js';
 import {
   contextDir,
@@ -861,6 +870,8 @@ export function createServer({
   // Optional hosted billing boundary. Reserve synchronously and atomically for
   // the complete request before any job starts. Local hosts remain unchanged.
   generationPolicy = null,
+  // Optional account-wide credit presentation, independent of generation permissions.
+  billingPresentation = null,
   // The cast is global rather than per-gallery, so it is addressed separately
   // from the gallery root and every gallery sees the same characters.
   charactersRoot = CHARACTERS_DIR,
@@ -933,6 +944,8 @@ export function createServer({
     'POST /api/characters': 'cast', 'POST /api/characters/update': 'cast', 'POST /api/characters/import': 'cast',
     'POST /api/characters/delete': 'cast', 'POST /api/characters/refs': 'cast', 'POST /api/characters/refs/generate': 'cast',
     'POST /api/characters/refs/keep': 'cast', 'POST /api/characters/candidates/clear': 'cast', 'POST /api/characters/refs/delete': 'cast',
+    'POST /api/characters/versions': 'cast', 'POST /api/characters/versions/update': 'cast', 'POST /api/characters/versions/delete': 'cast',
+    'POST /api/characters/merge': 'cast',
     'POST /api/voices/design': 'audio', 'POST /api/voices/save': 'audio', 'POST /api/voices/clone': 'audio', 'POST /api/voices/say': 'audio',
     'POST /api/apps/scene-remix': 'video'
   };
@@ -1175,44 +1188,66 @@ export function createServer({
   // a reference it already has, or one generated from its description — and
   // every other shot is drawn from that seed, which is what keeps them the same
   // character rather than five people who match the same sentence.
-  async function runCharacterRefsJob(job, { id, count }) {
+  //
+  // `key` is a character id or "id:version". A version with no pictures of its
+  // own yet gets takes instead: each one redraws the main look's references in
+  // the version's description, and whichever you keep seeds its later sets.
+  async function runCharacterRefsJob(job, { key, count }) {
     const api = apiById.get(characterApi);
     const apiKey = api ? keyOf(api.id) : '';
     if (!api || !apiKey) {
       throw new Error(`Generating references needs ${apiLabel(characterApi)} key. Add it in Settings.`);
     }
-    const character = getCharacter(charactersRoot, id);
-    if (!character) throw new Error(`No character "${id}"`);
-    if (!character.description && !character.refs.length) {
-      throw new Error('Give the character a description first. There is nothing to draw from yet.');
-    }
-
-    const seeded = character.refs.length > 0;
-    const shots = characterShots(character, seeded ? Number(count) + 1 : Number(count));
+    const look = getLook(charactersRoot, key);
+    if (!look) throw new Error(`No character "${key}"`);
     const shoot = (prompt, refs) =>
       generateImage({ api, apiKey, prompt, model: characterModel, refs, signal: job.ctrl.signal });
+    const keep = (buf, ext) => addCandidate(charactersRoot, key, buf, mediaTypeOf(`x.${ext}`) || 'image/png');
+    const coverFirst = (refs, cover) => [...refs].sort((a, b) => (b.file === cover) - (a.file === cover));
 
     const files = [];
-    let seedRef;
-    if (seeded) {
-      seedRef = resolveCharacters(charactersRoot, [id])[0]?.resolved?.[0];
+    let results;
+    if (look.version && !look.refs.length) {
+      const main = coverFirst(resolveCharacters(charactersRoot, [look.id])[0]?.resolved || [], look.baseCover).slice(0, 3);
+      if (!main.length && !look.description) {
+        throw new Error(`Describe the ${look.versionName} look, or give ${look.name} a reference image to start from.`);
+      }
+      const takes = versionShots(look, count);
+      let done = 0;
+      jobs.progress(job.id, `imagining ${takes.length} take${takes.length === 1 ? '' : 's'}`);
+      results = await mapLimit(takes, REF_FANOUT, async (prompt) => {
+        const { buf, ext } = await shoot(prompt, main);
+        const file = keep(buf, ext);
+        jobs.progress(job.id, `${++done} of ${takes.length}`);
+        return file;
+      });
     } else {
-      jobs.progress(job.id, 'drawing the first shot');
-      const { buf, ext } = await shoot(shots.seed, []);
-      const file = addCandidate(charactersRoot, id, buf, mediaTypeOf(`x.${ext}`) || 'image/png');
-      files.push(file);
-      seedRef = { file, buf, type: 'image/png', ext, dataUrl: `data:image/png;base64,${buf.toString('base64')}` };
-    }
-    if (!seedRef) throw new Error('Could not read a reference to build the rest of the set from.');
+      if (!look.description && !look.refs.length) {
+        throw new Error('Give the character a description first. There is nothing to draw from yet.');
+      }
+      const seeded = look.refs.length > 0;
+      const shots = characterShots(look, seeded ? Number(count) + 1 : Number(count));
+      let seedRef;
+      if (seeded) {
+        seedRef = coverFirst(resolveCharacters(charactersRoot, [key])[0]?.resolved || [], look.cover)[0];
+      } else {
+        jobs.progress(job.id, 'drawing the first shot');
+        const { buf, ext } = await shoot(shots.seed, []);
+        const file = keep(buf, ext);
+        files.push(file);
+        seedRef = { file, buf, type: 'image/png', ext, dataUrl: `data:image/png;base64,${buf.toString('base64')}` };
+      }
+      if (!seedRef) throw new Error('Could not read a reference to build the rest of the set from.');
 
-    let done = files.length;
-    const total = files.length + shots.variations.length;
-    const results = await mapLimit(shots.variations, REF_FANOUT, async (prompt) => {
-      const { buf, ext } = await shoot(prompt, [seedRef]);
-      const file = addCandidate(charactersRoot, id, buf, mediaTypeOf(`x.${ext}`) || 'image/png');
-      jobs.progress(job.id, `${++done} of ${total}`);
-      return file;
-    });
+      let done = files.length;
+      const total = files.length + shots.variations.length;
+      results = await mapLimit(shots.variations, REF_FANOUT, async (prompt) => {
+        const { buf, ext } = await shoot(prompt, [seedRef]);
+        const file = keep(buf, ext);
+        jobs.progress(job.id, `${++done} of ${total}`);
+        return file;
+      });
+    }
     for (const r of results) if (r.ok) files.push(r.value);
 
     const failed = results.filter((r) => !r.ok);
@@ -1221,7 +1256,7 @@ export function createServer({
     if (!files.length) throw new Error(failed[0]?.error || 'No reference images were produced.');
     return {
       kind: 'character-refs',
-      characterId: id,
+      characterId: key,
       files,
       failed: failed.length || undefined,
       error: failed.length ? failed[0].error : undefined
@@ -1231,6 +1266,8 @@ export function createServer({
   // Every model row, with display-ready facts. Built in one place because the
   // boot payload and the live refresh below have to agree exactly.
   function modelsPayload() {
+    const account = typeof billingPresentation === 'function' ? billingPresentation() : billingPresentation;
+    const present = (model, kind, provider) => presentCreditModel({ ...model, api: provider || model.api }, kind, account?.billing || account, account?.prices || []);
     const timings = modelTimings(root);
     const now = Date.now();
     // Only OpenRouter's catalogue carries prices, publish dates, Design Arena
@@ -1277,12 +1314,12 @@ export function createServer({
         id: a.id,
         name: a.name || a.id,
         video: !!a.video,
-        models: (a.models || []).map((m) => withFacts(m, 'image')),
+        models: (a.models || []).map((m) => present(withFacts(m, 'image'), 'image', a.id)),
         hasKey: !!keyOf(a.id)
       })),
-      videoModels: videoModels.map((m) => ({ ...withFacts(m, 'video'), api: videoApiOf(m), hasKey: !!keyOf(videoApiOf(m)) })),
-      songModels: songModels.map((m) => ({ ...audioFacts(m, 'song'), api: songApi, hasKey: songReady })),
-      voiceModels: voiceLib.models.map((m) => ({ ...audioFacts(presentVoiceModel(m) || m, 'voice'), api: voiceApi, hasKey: voiceReady }))
+      videoModels: videoModels.map((m) => ({ ...present(withFacts(m, 'video'), 'video', videoApiOf(m)), api: videoApiOf(m), hasKey: !!keyOf(videoApiOf(m)) })),
+      songModels: songModels.map((m) => ({ ...present(audioFacts(m, 'song'), 'song', songApi), api: songApi, hasKey: songReady })),
+      voiceModels: voiceLib.models.map((m) => ({ ...present(audioFacts(presentVoiceModel(m) || m, 'voice'), 'voice', voiceApi), api: voiceApi, hasKey: voiceReady }))
     };
   }
 
@@ -1396,7 +1433,8 @@ export function createServer({
       count,
       prompt,
       composed: composePrompt(prompt, cast),
-      castNames: cast.map((c) => c.name),
+      // "Nora (Spooky)" for a version, so the gallery says which look it was.
+      castNames: cast.map((c) => c.label || c.name),
       folderFull,
       folderRel
     };
@@ -1477,6 +1515,19 @@ export function createServer({
   }
 
   const badRequest = (message) => Object.assign(new Error(message), { status: 400 });
+  // The cast library throws plain errors for things the request got wrong.
+  const asBadRequest = (fn) => {
+    try {
+      return fn();
+    } catch (e) {
+      throw Object.assign(e, { status: e.status || 400 });
+    }
+  };
+  // The look a cast request is about: `id: "nora:spooky"`, or `id` with `version`.
+  const lookIn = (body) => {
+    const { id, version } = splitKey(body?.id);
+    return lookKey(id, String(body?.version ?? '').trim() || version);
+  };
 
   // A song: the idea, plus the lyrics, vocals, tempo and length folded into
   // the one prompt a music model takes. An attached picture sets the mood on a
@@ -2082,6 +2133,7 @@ export function createServer({
         title,
         root: suiteNavigation ? '' : root,
         hosted: suiteNavigation,
+        billing: (typeof billingPresentation === 'function' ? billingPresentation() : billingPresentation)?.billing || billingPresentation,
         preferenceScope,
         // What this person may do here (null: everything, a local install).
         permissions: permit ? Object.keys(NEEDS).filter(can) : null,
@@ -2735,10 +2787,38 @@ export function createServer({
       return { ok: deleteCharacter(charactersRoot, id) };
     },
 
+    // ---------- versions: other looks of the same person ----------
+
+    async 'POST /api/characters/versions'(req) {
+      const { id, name, description } = await readJsonBody(req);
+      return asBadRequest(() => createVersion(charactersRoot, id, { name, description }));
+    },
+
+    async 'POST /api/characters/versions/update'(req) {
+      const { id, version, name, description, cover } = await readJsonBody(req);
+      return asBadRequest(() => updateVersion(charactersRoot, id, version, { name, description, cover }));
+    },
+
+    async 'POST /api/characters/versions/delete'(req) {
+      const { id, version } = await readJsonBody(req);
+      return asBadRequest(() => deleteVersion(charactersRoot, id, version));
+    },
+
+    // A look saved as its own character ("Nora (Spooky)") becomes a version of
+    // the person it is a look of.
+    async 'POST /api/characters/merge'(req) {
+      const { from, into, name } = await readJsonBody(req);
+      return asBadRequest(() => mergeIntoVersion(charactersRoot, from, into, name));
+    },
+
     // A reference arrives either as an upload or as "make this generation one
     // of Nora's references", which is the loop that sharpens a character.
+    // Every route that takes a character takes one of its versions the same
+    // way: `id: "nora:spooky"`, or `id` with `version`.
     async 'POST /api/characters/refs'(req) {
-      const { id, dataUrl, folder, file, path: given } = await readJsonBody(req, 64 * 1024 * 1024);
+      const body = await readJsonBody(req, 64 * 1024 * 1024);
+      const { dataUrl, folder, file, path: given } = body;
+      const id = lookIn(body);
       if (dataUrl) return addRefFromDataUrl(charactersRoot, id, dataUrl);
       // A photo on disk — the third way in, for the same reason /api/context
       // takes one: a script has files, not data URLs.
@@ -2763,12 +2843,15 @@ export function createServer({
       );
     },
 
-    // Draw the character a set of reference shots with Nano Banana 2.
+    // Draw the character a set of reference shots with Nano Banana 2. For a
+    // version with no pictures yet, the shots are takes on the new look drawn
+    // from the main one (at most four).
     async 'POST /api/characters/refs/generate'(req) {
-      const { id, count } = await readJsonBody(req);
-      const character = getCharacter(charactersRoot, id);
-      if (!character) throw Object.assign(new Error(`No character "${id}"`), { status: 400 });
-      const want = Math.min(Math.max(Number(count) || 5, 1), 5);
+      const body = await readJsonBody(req);
+      const look = getLook(charactersRoot, lookIn(body));
+      if (!look) throw Object.assign(new Error(`No character "${lookIn(body)}"`), { status: 400 });
+      const takes = !!look.version && !look.refs.length;
+      const want = Math.min(Math.max(Number(body.count) || (takes ? 4 : 5), 1), takes ? 4 : 5);
       const plan = { kind: 'character-refs', model: characterModel, api: apiById.get(characterApi), count: want };
       generationPolicy?.validate?.(plan);
       const ticket = generationPolicy?.reserve([plan])?.[0];
@@ -2776,30 +2859,30 @@ export function createServer({
           by: actorOf(),
         kind: 'image',
         folder: '',
-        prompt: `Reference shots for ${character.name}`,
+        prompt: takes ? `${look.versionName} look for ${look.name}` : `Reference shots for ${look.label}`,
         model: characterModel,
-        characterId: character.id,
-        refs: character.refs.length,
+        characterId: look.key,
+        refs: (takes ? look.baseRefs : look.refs).length,
         onCancel: () => generationPolicy?.release(ticket),
-        run: (j) => executeReserved(ticket, () => runCharacterRefsJob(j, { id: character.id, count: want }), j)
+        run: (j) => executeReserved(ticket, () => runCharacterRefsJob(j, { key: look.key, count: want }), j)
       });
-      return { job, model: characterModel, count: want };
+      return { job, model: characterModel, count: want, takes };
     },
 
     // Promote chosen shots into real references; the rest are thrown away.
     async 'POST /api/characters/refs/keep'(req) {
-      const { id, files } = await readJsonBody(req);
-      return keepCandidates(charactersRoot, id, files);
+      const body = await readJsonBody(req);
+      return asBadRequest(() => keepCandidates(charactersRoot, lookIn(body), body.files));
     },
 
     async 'POST /api/characters/candidates/clear'(req) {
-      const { id, files } = await readJsonBody(req);
-      return { character: clearCandidates(charactersRoot, id, files) };
+      const body = await readJsonBody(req);
+      return { character: asBadRequest(() => clearCandidates(charactersRoot, lookIn(body), body.files)) };
     },
 
     async 'POST /api/characters/refs/delete'(req) {
-      const { id, file } = await readJsonBody(req);
-      return { ok: deleteRef(charactersRoot, id, file), character: getCharacter(charactersRoot, id) };
+      const body = await readJsonBody(req);
+      return { ok: deleteRef(charactersRoot, lookIn(body), body.file), character: getCharacter(charactersRoot, splitKey(lookIn(body)).id) };
     }
   };
 

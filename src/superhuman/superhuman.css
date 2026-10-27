@@ -306,3 +306,12 @@ sh-switcher[hidden]{display:none}
 @keyframes sh-spin{to{transform:rotate(360deg)}}
 @keyframes sh-shimmer{to{background-position:-200% 0}}
 @media (prefers-reduced-motion:reduce){.sh *,.sh *::before,.sh *::after,.sh-dialog,.sh-palette,.sh-toast{animation-duration:1ms!important;transition-duration:1ms!important}}
+
+/* The shared account balance stays visible in each app. */
+.sh-credit-badge { flex-shrink: 0; margin: 8px 12px; padding: 8px 12px; border: 1px solid var(--sh-line); border-radius: 10px; background: var(--sh-surface-2); color: var(--sh-ink); font: 500 12px var(--sh-font, sans-serif); cursor: pointer; white-space: nowrap; text-align: left; }
+.sh-credit-badge:hover { border-color: var(--sh-brand); }
+.sh-sidebar > .sh-credit-badge, .sidebar > .sh-credit-badge { align-self: stretch; }
+.sh-credit-dialog { max-width: min(420px, calc(100vw - 32px)); padding: 24px; border: 1px solid var(--sh-line); border-radius: 16px; background: var(--sh-surface); color: var(--sh-ink); font: 14px/1.6 var(--sh-font, sans-serif); }
+.sh-credit-dialog::backdrop { background: #0008; }
+.sh-credit-dialog h2 { margin: 0 0 16px; font-size: 20px; }
+.sh-credit-dialog form { margin-top: 20px; text-align: right; }

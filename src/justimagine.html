@@ -232,6 +232,27 @@
   .cast-row:hover .edit { opacity: 1; }
   .cast-row .edit:hover { background: var(--surface-3); color: var(--text); }
   #castEmpty { font-size: 12px; color: var(--text-3); padding: 10px 10px; line-height: 1.55; }
+  /* A person's looks: the main one (Reference) and its versions, one pressed. */
+  .looks { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+  .look {
+    all: unset; cursor: pointer; box-sizing: border-box; height: 22px; line-height: 20px; padding: 0 9px; max-width: 140px;
+    border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: var(--text-2);
+    font-size: 11.5px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    transition: background var(--sh-fast) var(--ease), color var(--sh-fast) var(--ease), border-color var(--sh-fast) var(--ease);
+  }
+  .look:hover { background: var(--surface-3); color: var(--text); }
+  .look:focus-visible { box-shadow: var(--sh-focus); }
+  .look[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent-hover); }
+  .look.add { border-style: dashed; color: var(--text-3); background: none; }
+  .look.add:hover { color: var(--accent-hover); border-color: var(--accent-line); }
+  .cast-row:has(.looks) { align-items: flex-start; }
+  .cast-row:has(.looks) .edit { margin-top: 4px; }
+  .cast-merge { margin: 2px 2px 8px; padding: 10px 11px; border-radius: var(--sh-radius); border: 1px solid var(--accent-line); background: var(--accent-soft); font-size: 12px; line-height: 1.45; }
+  .cast-merge b { display: block; font-weight: 550; color: var(--text); margin-bottom: 2px; }
+  .cast-merge span { display: block; color: var(--text-2); }
+  .cast-merge button { all: unset; cursor: pointer; margin-top: 8px; display: inline-flex; align-items: center; height: 26px; padding: 0 10px; border-radius: var(--sh-radius-sm); background: var(--accent); color: var(--accent-ink); font-weight: 500; }
+  .cast-merge button:hover { background: var(--accent-2); }
+  .cast-merge button:disabled { opacity: .5; cursor: progress; }
 
   /* ---------- gallery bar ---------- */
   #galleryBar {
@@ -465,6 +486,21 @@
   /* The composer itself shows focus (its border and lift), not each bare field in it. */
   .composer textarea:focus-visible { box-shadow: none; }
 
+  /* Tagged cast show as badges. A textarea cannot style its own words, so a
+     copy of the prompt sits behind it, laid out the same, with each tagged
+     mention marked; only the marks show, under the textarea's own text. */
+  .prompt-marks {
+    position: absolute; inset: 0; z-index: 0; pointer-events: none; overflow: hidden;
+    font-size: 15px; font-weight: 400; line-height: 1.55; padding: 6px 74px 8px 2px;
+    white-space: pre-wrap; overflow-wrap: break-word; color: transparent;
+  }
+  .prompt-marks mark {
+    color: transparent; background: var(--accent-soft); border-radius: 5px;
+    box-shadow: 0 0 0 2px var(--accent-soft), 0 0 0 3px var(--accent-line);
+    -webkit-box-decoration-break: clone; box-decoration-break: clone;
+  }
+  .composer .prompt-wrap #prompt { position: relative; z-index: 1; }
+
   /* ---------- prompt tools ---------- */
   .prompt-wrap { position: relative; }
   /* Room for the buttons so a long prompt never runs under them. */
@@ -605,6 +641,22 @@
   }
   #castMenu.open { display: block; animation: popUp .16s var(--ease); }
   #castMenu .none { font-size: 12px; color: var(--text-3); padding: 8px 10px; line-height: 1.5; }
+  /* "Add to a character" on a generation: which person, which look */
+  #addMenu {
+    display: none; position: fixed; z-index: 160; width: min(320px, calc(100vw - 16px));
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--sh-radius-lg);
+    box-shadow: var(--shadow-lg); padding: 6px; overflow-y: auto;
+  }
+  #addMenu.open { display: block; animation: popUp .16s var(--ease); }
+  #addMenu .add-head { padding: 6px 9px 6px; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--text-3); }
+  #addMenu .cast-row { cursor: default; align-items: flex-start; }
+  #addMenu .cast-row:hover { background: none; }
+  #addMenu .add-new { display: flex; gap: 6px; margin-top: 6px; }
+  #addMenu .add-new input {
+    flex: 1; min-width: 0; height: 26px; padding: 0 8px; border-radius: var(--sh-radius-sm); border: 1px solid var(--border-strong);
+    background: var(--surface); color: var(--text); font: inherit; font-size: 12px; outline: none;
+  }
+  #addMenu .add-new input:focus { border-color: var(--accent); box-shadow: var(--sh-focus); }
 
   /* ---------- @ and # tagging in the prompt ----------
      Typing @ offers the cast and # the reference library, in a card that
@@ -628,6 +680,8 @@
   #tagMenu .tag-row b { display: block; font-size: 13px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #tagMenu .tag-row b mark { background: none; color: var(--accent-hover); }
   #tagMenu .tag-row .who span { display: block; font-size: 11px; color: var(--text-3); }
+  #tagMenu .tag-row .looks { margin-top: 4px; }
+  #tagMenu .tag-row:has(.looks) { align-items: flex-start; }
   #tagMenu .tag-on { flex: none; font-size: 10.5px; font-weight: 600; color: var(--accent-hover); background: var(--accent-soft); padding: 2px 7px; border-radius: 999px; }
   #tagMenu .tag-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; overflow-y: auto; max-height: 252px; padding: 2px 10px 10px; }
   #tagMenu .tag-tile { position: relative; aspect-ratio: 1; border-radius: var(--sh-radius); overflow: hidden; cursor: pointer; box-shadow: 0 0 0 1px var(--border); transition: transform .12s var(--ease), box-shadow .12s var(--ease); }
@@ -887,6 +941,18 @@
   .cand-actions button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
   .cand-actions button.primary:hover { background: var(--accent-2); }
   .cand-actions button.off { opacity: .4; cursor: not-allowed; }
+  .ed-looks { margin-top: 0; }
+  .ed-look-name { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+  .ed-look-name input { flex: 1; min-width: 0; }
+  .ed-look-name button { all: unset; cursor: pointer; flex: none; font-size: 12.5px; font-weight: 500; height: 30px; padding: 0 10px; border-radius: var(--sh-radius-sm); color: var(--danger); }
+  .ed-look-name button:hover { background: var(--danger-soft); }
+  .ed-newlook { padding: 14px; border-radius: var(--sh-radius-lg); border: 1px solid var(--accent-line); background: color-mix(in srgb, var(--accent-soft) 45%, var(--surface)); }
+  .ed-newlook-head b { display: block; font-size: 13.5px; font-weight: 600; }
+  .ed-newlook-head > span { display: block; font-size: 12px; color: var(--text-3); margin: 2px 0 10px; }
+  .ed-look-name .ed-look-label { flex: none; font-size: 12px; color: var(--text-3); }
+  .ed-newlook .looks { margin: 0 0 10px; }
+  .ed-newlook input { margin-bottom: 8px; }
+  #edNewNote { font-size: 11.5px; color: var(--text-3); margin-top: 8px; line-height: 1.4; }
   .ed-panel.dragover { outline: 2px dashed var(--accent); outline-offset: -6px; }
   .ed-panel.dragover #edDrop { color: var(--accent-hover); }
   .ed-actions { display: flex; gap: 8px; align-items: center; margin-top: 20px; }
@@ -1081,7 +1147,7 @@
     .turn-meta .m { min-width: 72px; }
     .dock { padding: 0 8px 8px; padding-bottom: max(8px, env(safe-area-inset-bottom)); }
     .composer { border-radius: var(--sh-radius-xl); padding: 8px 10px 8px 12px; }
-    .composer textarea { font-size: 16px; }  /* 16px stops iOS zooming on focus */
+    .composer textarea, .prompt-marks { font-size: 16px; }  /* 16px stops iOS zooming on focus */
     .composer-row { gap: 6px; flex-wrap: nowrap; overflow-x: auto; }
     .composer-row > * { flex: none; }
     #goCost { display: none; }
@@ -1401,6 +1467,7 @@
         </div>
         <div class="prompt-row">
         <div class="prompt-wrap">
+          <div id="promptMarks" class="prompt-marks" aria-hidden="true"></div>
           <textarea id="prompt" rows="1" placeholder="Describe an image… (@ to tag cast · # for references · Enter to generate)" autofocus></textarea>
           <div class="prompt-tools">
             <button id="revert" class="hide" title="Put back what you wrote">↺</button>
@@ -1600,8 +1667,29 @@
       <label for="edName">Name</label>
       <input id="edName" type="text" placeholder="Nora" spellcheck="false" maxlength="60">
     </div>
+    <div class="ed-field hide" id="edLooksField">
+      <label>Versions <span id="edLooksNote"></span></label>
+      <div class="looks ed-looks" id="edLooks"></div>
+      <div class="ed-look-name hide" id="edLookNameRow">
+        <span class="ed-look-label">Version name</span>
+        <input id="edLookName" type="text" maxlength="40" spellcheck="false" aria-label="Version name" placeholder="Spooky">
+        <button id="edLookDelete" type="button">Delete this version</button>
+      </div>
+    </div>
+    <div class="ed-field ed-newlook hide" id="edNewLook">
+      <div class="ed-newlook-head"><b>New version of <span id="edNewWho"></span></b><span>Another look with its own reference images. Same name, same voice.</span></div>
+      <div class="looks" id="edIdeas"></div>
+      <input id="edNewName" type="text" maxlength="40" placeholder="Name, like Spooky" spellcheck="false" aria-label="Version name">
+      <textarea id="edNewDesc" rows="2" placeholder="What is different: a pale Halloween ghoul with glowing green eyes and a tattered black cloak" aria-label="What is different in this version"></textarea>
+      <div class="cand-actions">
+        <button id="edNewGo" class="primary" type="button">✦ Create and imagine 4 takes</button>
+        <button id="edNewEmpty" type="button">Create empty</button>
+        <button id="edNewCancel" type="button">Cancel</button>
+      </div>
+      <div id="edNewNote"></div>
+    </div>
     <div class="ed-field">
-      <label for="edDesc">Description</label>
+      <label for="edDesc">Description <span id="edDescFor"></span></label>
       <div class="prompt-wrap">
         <textarea id="edDesc" rows="3" placeholder="early 30s, short dark curly hair, freckles, green field jacket"></textarea>
         <div class="prompt-tools">
@@ -1751,7 +1839,7 @@
   };
   const fmtSec = (ms) => (ms / 1000).toFixed(1) + 's';
   const fmtDur = (s) => (s >= 60 ? Math.floor(s / 60) + ':' + String(Math.round(s % 60)).padStart(2, '0') : Math.round(s) + 's');
-  const money = (v) => (v < 0.995 ? `${+(v * 100).toFixed(v < 0.1 ? 1 : 0)}¢` : `$${v.toFixed(2)}`);
+  const money = (v) => state.billing?.mode === 'credits' ? `${Math.max(0, Math.ceil(v * state.billing.creditsPerUsd - 1e-9)).toLocaleString()} credits` : (v < 0.995 ? `${+(v * 100).toFixed(v < 0.1 ? 1 : 0)}¢` : `$${v.toFixed(2)}`);
   const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
   const feed = $('feed'), turnsEl = $('turns'), empty = $('empty'), promptEl = $('prompt');
@@ -2491,7 +2579,7 @@
           : 'speed: median of your own generations here'
         : null
     ].filter(Boolean);
-    $('mmFoot').textContent = foot.join(' · ');
+    $('mmFoot').textContent = (state.billing?.mode === 'credits' ? foot.filter(x => !x.startsWith('cost:')).concat('cost: credits from your shared account') : foot).join(' · ');
   }
 
   function chooseModel(id, apiId) {
@@ -2804,6 +2892,14 @@
     // ElevenLabs bills credits, not dollars: say how many this will use.
     if (mode === 'voice') {
       const chars = promptEl.value.trim().length;
+      const accountPrice = modelSpec()?.accountPricing;
+      if (state.billing?.mode === 'credits') {
+        const usd = accountPrice?.perCall ?? (accountPrice?.per1kCharacters != null ? chars * accountPrice.per1kCharacters / 1000 : null);
+        const amount = usd == null ? null : Math.ceil(usd * state.billing.creditsPerUsd - 1e-9) * Math.min(count, countMax());
+        out.textContent = amount == null ? '' : `≈ ${amount.toLocaleString()} credits`;
+        out.title = 'Estimated account credits for this speech request';
+        return;
+      }
       const model = modelSpec();
       const rate = model?.credits;
       const takes = Math.min(count, countMax());
@@ -2830,8 +2926,12 @@
     } else if (p?.perImage != null) {
       cost = p.perImage * count;
     }
+    if (cost != null && state.billing?.mode === 'credits') {
+      const takes = Math.min(count, isVideoMode() ? 4 : countMax());
+      cost = Math.ceil(cost / takes * state.billing.creditsPerUsd - 1e-9) * takes / state.billing.creditsPerUsd;
+    }
     out.textContent = cost != null ? '≈ ' + money(cost) : '';
-    out.title = cost != null ? 'Estimated from list prices' : '';
+    out.title = cost != null ? state.billing?.mode === 'credits' ? 'Estimated account credits' : 'Estimated from list prices' : '';
   }
 
   function persist() {
@@ -3232,7 +3332,7 @@
       const { openMusicVideoMaker } = await import('/assets/music-video-maker.js');
       openMusicVideoMaker({
         song: song ? { folder: song.folder ?? folder, file: song.file, prompt: song.prompt, lyrics: song.lyrics, sung: song.sung, duration: song.duration } : null,
-        picked: [...picked], lyrics: lyricsEl.value, musicStyle: $('musicStyle').value, vocals: vocalsSel.value,
+        picked: [...new Set([...picked].map(personOf))], lyrics: lyricsEl.value, musicStyle: $('musicStyle').value, vocals: vocalsSel.value,
         prompt: mode === 'music-video' ? promptEl.value.trim() : '', aspect: aspSel.value, resolution: resSel.value,
         model: isVideoMode() ? currentModel() : '', api: isVideoMode() ? modelSpec()?.api : '',
         toast,
@@ -3752,15 +3852,111 @@
   const castList = $('castList'), castMenu = $('castMenu'), castBtn = $('castBtn');
   // Out of the controls row (which scrolls, and so clips) and onto the page.
   document.body.appendChild(castMenu);
-  const charRefUrl = (c, file) => '/charref/' + encodeURIComponent(file) + '?c=' + encodeURIComponent(c.id);
+  // `who` is a character, or the key of one of its looks ("nora:spooky").
+  const charRefUrl = (who, file) => '/charref/' + encodeURIComponent(file) + '?c=' + encodeURIComponent(typeof who === 'string' ? who : who.id);
   const initials = (name) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('');
 
-  function faceEl(c) {
+  // ---- looks: the main one and its versions ----
+  // A character can have versions (Spooky, Cartoon…): other looks of them with
+  // their own description and reference images, and the same name and voice.
+  // A look's key is the character's id for the main look, which is called
+  // Reference, and "id:version" for a version. One look of each person goes
+  // into a generation, and the "@Nora (Spooky)" mention says which.
+  const looksOf = (c) => [
+    { key: c.id, id: '', name: 'Reference', description: c.description, cover: c.cover, refs: c.refs, candidates: c.candidates || [] },
+    ...(c.versions || [])
+  ];
+  const personOf = (key) => String(key).split(':')[0];
+  function lookAt(key) {
+    const c = cast.find((x) => x.id === personOf(key));
+    const look = c && looksOf(c).find((l) => l.key === key);
+    return look ? { c, look } : null;
+  }
+  // Which of their looks is in the next generation, if any.
+  const pickedOf = (c) => [...picked].find((k) => personOf(k) === c.id) || '';
+  const lookLabel = (c, look) => (look.id ? `${c.name} (${look.name})` : c.name);
+  const mentionOf = (c, look) => '@' + lookLabel(c, look);
+  const reEsc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // "@Nora" must not match the start of "@Nora (Spooky)".
+  function mentionRe(c, look, flags = 'i') {
+    if (look.id) return new RegExp(`@${reEsc(c.name)} \\(${reEsc(look.name)}\\)`, flags);
+    const versions = (c.versions || []).map((v) => reEsc(v.name)).join('|');
+    return new RegExp(`@${reEsc(c.name)}(?!\\w)${versions ? `(?! \\((?:${versions})\\))` : ''}`, flags);
+  }
+  // A generation names its cast by label ("Nora (Spooky)"); this finds the look again.
+  function keyOfLabel(label) {
+    for (const c of cast) for (const l of looksOf(c)) if (lookLabel(c, l) === label) return l.key;
+    return '';
+  }
+  // Choosing someone's look rewrites their mentions of any other look to match,
+  // so the prompt and the picks never disagree.
+  function retagText(text, c, toKey) {
+    const to = looksOf(c).find((l) => l.key === toKey);
+    if (!to) return text;
+    for (const l of looksOf(c)) if (l.key !== toKey) text = text.replace(mentionRe(c, l, 'gi'), mentionOf(c, to));
+    return text;
+  }
+  const lastLook = new Map(); // the look a person last went in with
+
+  // Put this look in the next generation in place of any other look of theirs.
+  // With `toggle`, choosing the one already in takes them out.
+  function pickLook(key, { toggle = false, retag = true } = {}) {
+    const hit = lookAt(key);
+    if (!hit) return;
+    const before = pickedOf(hit.c);
+    if (toggle && before === key) picked.delete(key);
+    else {
+      if (before) picked.delete(before);
+      picked.add(key);
+      lastLook.set(hit.c.id, key);
+      if (retag) {
+        const text = retagText(promptEl.value, hit.c, key);
+        if (text !== promptEl.value) { promptEl.value = text; promptEl.dispatchEvent(new Event('input')); }
+      }
+    }
+    persist();
+    renderCast();
+  }
+
+  // Clicking the person: in or out, with the look they last went in with.
+  function togglePerson(c) {
+    const on = pickedOf(c);
+    if (!on) { pickLook(lookAt(lastLook.get(c.id) || '') ? lastLook.get(c.id) : c.id); return; }
+    picked.delete(on);
+    persist();
+    renderCast();
+  }
+
+  // A person's looks as chips, the one in use pressed. `down` acts on
+  // pointerdown, for menus that must not take focus from the prompt.
+  function lookChips(c, { on, choose, extra, down = false }) {
+    const row = el('div', 'looks');
+    for (const look of looksOf(c)) {
+      const b = el('button', 'look', look.name);
+      b.type = 'button';
+      b.setAttribute('aria-pressed', String(look.key === on));
+      b.title = look.id
+        ? `${lookLabel(c, look)} · ${look.refs.length ? plural(look.refs.length, 'reference') : 'no pictures of its own yet, so it borrows Reference’s'}`
+        : `${c.name}’s main look · ${plural(look.refs.length, 'reference')}`;
+      if (down) b.onpointerdown = (e) => { e.preventDefault(); e.stopPropagation(); choose(look.key); };
+      else b.onclick = (e) => { e.stopPropagation(); choose(look.key); };
+      row.appendChild(b);
+    }
+    if (extra) row.appendChild(extra);
+    return row;
+  }
+
+  const refsLine = (look) => look.refs.length ? plural(look.refs.length, 'reference') : look.id ? 'no pictures yet · uses Reference' : 'no references yet';
+
+  // The face of a look; a version with no pictures yet shows the main one.
+  function faceEl(c, key) {
     const face = el('div', 'face');
-    if (c.cover) {
+    const look = (key && lookAt(key)?.look) || looksOf(c)[0];
+    const cover = look.cover ? [look.key, look.cover] : c.cover ? [c.id, c.cover] : null;
+    if (cover) {
       const img = document.createElement('img');
-      img.src = charRefUrl(c, c.cover);
-      img.alt = c.name;
+      img.src = charRefUrl(cover[0], cover[1]);
+      img.alt = lookLabel(c, look);
       face.appendChild(img);
     } else {
       face.textContent = initials(c.name) || '?';
@@ -3768,40 +3964,84 @@
     return face;
   }
 
+  // Looks saved as characters of their own before versions existed:
+  // "Nora (Spooky)" beside a "Nora".
+  function versionSuggestions() {
+    const byName = new Map(cast.map((c) => [c.name.toLowerCase(), c]));
+    return cast.flatMap((c) => {
+      const m = c.name.match(/^(.*\S)\s*\(([^()]+)\)\s*$/);
+      const into = m && byName.get(m[1].toLowerCase());
+      return into && into.id !== c.id && !(c.versions || []).length ? [{ from: c, into, name: m[2].trim() }] : [];
+    });
+  }
+
+  function mergeBanner(merges) {
+    const box = el('div', 'cast-merge');
+    const one = merges.length === 1 ? merges[0] : null;
+    box.append(
+      el('b', '', one ? `${one.from.name} looks like a version of ${one.into.name}` : `${merges.length} characters look like versions of others`),
+      el('span', '', one
+        ? `Make it ${one.into.name}’s ${one.name} version, so one character holds every look.`
+        : `${merges.slice(0, 3).map((m) => m.from.name).join(', ')}${merges.length > 3 ? '…' : ''}. Make each a version of its person, so one character holds every look.`)
+    );
+    const go = el('button', '', one ? 'Make it a version' : 'Make them versions');
+    go.type = 'button';
+    go.onclick = async () => {
+      const list = merges.map((m) => `• ${m.from.name} → ${m.into.name}, “${m.name}” version`).join('\n');
+      if (!confirm(`${list}\n\nTheir descriptions and reference images move across and the separate characters are removed. Every version speaks with the person’s own voice. Generations already made are untouched.`)) return;
+      go.disabled = true;
+      let done = 0;
+      for (const m of merges) {
+        try {
+          const r = await api('/api/characters/merge', { from: m.from.id, into: m.into.id, name: m.name });
+          // Whoever was picked as the separate character stays picked, as the version.
+          if (pickedOf(m.from)) { picked.delete(pickedOf(m.from)); for (const k of [...picked]) if (personOf(k) === m.into.id) picked.delete(k); picked.add(r.version.key); }
+          done++;
+        } catch (e) {
+          toast(`${m.from.name}: ${e.message}`);
+        }
+      }
+      persist();
+      await reloadCast();
+      if (done) toast(`Made ${plural(done, 'version')}. Pick one from the chips under each name.`);
+    };
+    box.appendChild(go);
+    return box;
+  }
+
   function renderCast() {
-    // drop selections for characters that no longer exist
-    for (const id of [...picked]) if (!cast.some((c) => c.id === id)) picked.delete(id);
+    // drop selections for looks that no longer exist
+    for (const key of [...picked]) if (!lookAt(key)) picked.delete(key);
 
     castList.innerHTML = '';
     $('castEmpty').classList.toggle('hide', cast.length > 0);
+    const merges = versionSuggestions();
+    if (merges.length) castList.appendChild(mergeBanner(merges));
     for (const c of cast) {
-      const row = el('div', 'cast-row' + (picked.has(c.id) ? ' on' : ''));
-      row.title = picked.has(c.id) ? 'In the next generation. Click to remove.' : 'Click to put in the next generation';
+      const on = pickedOf(c);
+      const look = on ? lookAt(on).look : looksOf(c)[0];
+      const row = el('div', 'cast-row' + (on ? ' on' : ''));
+      row.title = on ? `${lookLabel(c, look)} is in the next generation. Click to remove.` : 'Click to put in the next generation';
       const who = el('div', 'who');
-      const refsText = c.refs.length ? `${c.refs.length} reference${c.refs.length === 1 ? '' : 's'}` : 'no references yet';
-      who.append(el('b', '', c.name), el('span', '', c.voice ? `${refsText} · voice: ${c.voice.name}` : refsText));
+      who.append(el('b', '', c.name), el('span', '', c.voice ? `${refsLine(look)} · voice: ${c.voice.name}` : refsLine(look)));
+      if (c.versions?.length) who.appendChild(lookChips(c, { on, choose: (key) => pickLook(key, { toggle: true }) }));
       const edit = el('button', 'edit', 'Edit');
       edit.title = 'Edit';
-      edit.onclick = (e) => { e.stopPropagation(); openEditor(c); };
-      row.append(faceEl(c), who, edit);
-      row.onclick = () => togglePicked(c.id);
+      edit.onclick = (e) => { e.stopPropagation(); openEditor(c, on); };
+      row.append(faceEl(c, on), who, edit);
+      row.onclick = () => togglePerson(c);
       castList.appendChild(row);
     }
     renderCastPicker();
-  }
-
-  function togglePicked(id) {
-    picked.has(id) ? picked.delete(id) : picked.add(id);
-    persist();
-    renderCast();
+    paintMentions();
   }
 
   function renderCastPicker() {
-    const chosen = cast.filter((c) => picked.has(c.id));
+    const chosen = [...picked].map(lookAt).filter(Boolean);
     castBtn.classList.toggle('has', chosen.length > 0);
-    $('castLabel').textContent = chosen.length === 0 ? 'Cast' : chosen.length === 1 ? chosen[0].name : `${chosen.length} characters`;
+    $('castLabel').textContent = chosen.length === 0 ? 'Cast' : chosen.length === 1 ? lookLabel(chosen[0].c, chosen[0].look) : `${chosen.length} characters`;
     castBtn.title = chosen.length
-      ? `In this generation: ${chosen.map((c) => c.name).join(', ')}`
+      ? `In this generation: ${chosen.map(({ c, look }) => lookLabel(c, look)).join(', ')}`
       : 'Put saved characters in this generation';
 
     castMenu.innerHTML = '';
@@ -3810,13 +4050,46 @@
       return;
     }
     for (const c of cast) {
-      const row = el('div', 'cast-row' + (picked.has(c.id) ? ' on' : ''));
+      const on = pickedOf(c);
+      const look = on ? lookAt(on).look : looksOf(c)[0];
+      const row = el('div', 'cast-row' + (on ? ' on' : ''));
       const who = el('div', 'who');
-      who.append(el('b', '', c.name), el('span', '', picked.has(c.id) ? 'in this generation' : `${c.refs.length} reference${c.refs.length === 1 ? '' : 's'}`));
-      row.append(faceEl(c), who);
-      row.onclick = () => togglePicked(c.id);
+      who.append(el('b', '', c.name), el('span', '', on ? `${look.id ? look.name + ' · ' : ''}in this generation` : refsLine(look)));
+      if (c.versions?.length) who.appendChild(lookChips(c, { on, choose: (key) => pickLook(key, { toggle: true }) }));
+      row.append(faceEl(c, on), who);
+      row.onclick = () => togglePerson(c);
       castMenu.appendChild(row);
     }
+  }
+
+  // Every mention of a look in the next generation is drawn as a badge, on the
+  // layer behind the prompt (see .prompt-marks). A mention of someone who is
+  // not tagged stays plain, which is how you can tell.
+  function paintMentions() {
+    const box = $('promptMarks');
+    if (!box) return;
+    const text = promptEl.value;
+    const ranges = [];
+    for (const key of picked) {
+      const hit = lookAt(key);
+      if (hit) for (const m of text.matchAll(mentionRe(hit.c, hit.look, 'gi'))) ranges.push([m.index, m.index + m[0].length]);
+    }
+    ranges.sort((a, b) => a[0] - b[0]);
+    const out = document.createDocumentFragment();
+    let at = 0;
+    for (const [start, end] of ranges) {
+      if (start < at) continue;
+      const mark = document.createElement('mark');
+      mark.textContent = text.slice(start, end);
+      out.append(text.slice(at, start), mark);
+      at = end;
+    }
+    // The trailing newline keeps a last empty line, as the textarea has one.
+    out.append(text.slice(at) + '\n');
+    box.replaceChildren(out);
+    // A scrollbar on a long prompt narrows its text; the copy narrows with it.
+    box.style.paddingRight = `${74 + promptEl.offsetWidth - promptEl.clientWidth}px`;
+    box.scrollTop = promptEl.scrollTop;
   }
 
   castBtn.onclick = (e) => {
@@ -3860,23 +4133,41 @@
   }
 
   // The tag being typed: a sigil at the start or after a space, then no space
-  // for #, and for @ a second word only while it still matches a name.
+  // for #, and for @ more words only while they still match someone, or one of
+  // their versions ("@nora spo", "@Nora (Spo").
   function tagAtCaret() {
     if (promptEl.selectionStart !== promptEl.selectionEnd) return null;
     const upto = promptEl.value.slice(0, promptEl.selectionStart);
-    const m = upto.match(/(^|\s)([@#])([^\s@#]*(?: [^\s@#]*)?)$/);
+    const m = upto.match(/(^|\s)([@#])([^\s@#]*(?: [^\s@#]*){0,3})$/);
     if (!m) return null;
     const sigil = m[2], query = m[3];
-    if (query.includes(' ') && (sigil === '#' || !cast.some((c) => c.name.toLowerCase().startsWith(query.toLowerCase())))) return null;
+    if (query.includes(' ') && (sigil === '#' || !tagPeople(query).length)) return null;
     return { sigil, start: upto.length - query.length - 1, query };
   }
 
-  function tagItems(sigil, query) {
+  // People matching what follows the @, each with the look to tag: the one the
+  // query names, else the one they are already in with, else Reference.
+  function tagPeople(query) {
     const q = query.toLowerCase();
-    if (sigil === '@') {
-      const rank = (c) => { const n = c.name.toLowerCase(); return n.startsWith(q) ? 0 : n.split(/\s+/).some((w) => w.startsWith(q)) ? 1 : n.includes(q) ? 2 : 9; };
-      return cast.filter((c) => rank(c) < 9).sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name)).slice(0, 30);
+    const rank = (name, s) => { const n = name.toLowerCase(); return n.startsWith(s) ? 0 : n.split(/\s+/).some((w) => w.startsWith(s)) ? 1 : n.includes(s) ? 2 : 9; };
+    const rows = [];
+    for (const c of cast) {
+      const looks = looksOf(c);
+      const r = rank(c.name, q);
+      if (r < 9) { rows.push({ c, look: Math.max(0, looks.findIndex((l) => l.key === pickedOf(c))), rank: r }); continue; }
+      for (let i = q.indexOf(' '); i > 0; i = q.indexOf(' ', i + 1)) {
+        const head = q.slice(0, i), tail = q.slice(i + 1).replace(/^\(/, '').replace(/\)$/, '');
+        if (!tail || rank(c.name, head) === 9) continue;
+        const at = looks.findIndex((l) => l.name.toLowerCase().startsWith(tail));
+        if (at >= 0) { rows.push({ c, look: at, rank: 3 + rank(c.name, head) }); break; }
+      }
     }
+    return rows.sort((a, b) => a.rank - b.rank || a.c.name.localeCompare(b.c.name)).slice(0, 30);
+  }
+
+  function tagItems(sigil, query) {
+    if (sigil === '@') return tagPeople(query);
+    const q = query.toLowerCase();
     return ctxItems.filter((it) => !q || it.file.toLowerCase().includes(q)).slice(0, 60);
   }
 
@@ -3910,12 +4201,16 @@
         : (ctxItems.length ? `No reference matches “${tag.query}”.` : 'No reference images yet. Paste or drop a picture here to add one.')));
     } else if (people) {
       const list = el('div', 'tag-list scroll');
-      tag.items.forEach((c, i) => {
+      tag.items.forEach((item, i) => {
+        const { c } = item;
+        const looks = looksOf(c);
+        const look = looks[item.look] || looks[0];
         const row = tagOption(el('div', 'tag-row' + (i === tag.act ? ' act' : '')), i);
         const who = el('div', 'who');
-        who.append(highlight(c.name, tag.query), el('span', '', c.refs.length ? plural(c.refs.length, 'reference') : 'no references yet'));
-        row.append(faceEl(c), who);
-        if (picked.has(c.id)) row.appendChild(el('span', 'tag-on', 'Tagged'));
+        who.append(highlight(c.name, tag.query), el('span', '', refsLine(look)));
+        if (c.versions?.length) who.appendChild(lookChips(c, { on: look.key, down: true, choose: (key) => chooseTag(i, looks.findIndex((l) => l.key === key)) }));
+        row.append(faceEl(c, look.key), who);
+        if (pickedOf(c)) row.appendChild(el('span', 'tag-on', 'Tagged'));
         list.appendChild(row);
       });
       tagMenu.appendChild(list);
@@ -3936,7 +4231,8 @@
     }
     if (tag.items.length) {
       const foot = el('div', 'tag-foot');
-      foot.innerHTML = `<span><kbd>${people ? '↑↓' : '←→'}</kbd>move</span><span><kbd>↵</kbd>${people ? 'tag' : 'attach'}</span><span><kbd>esc</kbd>close</span>`;
+      const versions = people && tag.items.some((it) => it.c.versions?.length);
+      foot.innerHTML = `<span><kbd>${people ? '↑↓' : '←→'}</kbd>move</span>${versions ? '<span><kbd>←→</kbd>version</span>' : ''}<span><kbd>↵</kbd>${people ? 'tag' : 'attach'}</span><span><kbd>esc</kbd>close</span>`;
       tagMenu.appendChild(foot);
     }
     tagMenu.classList.add('open');
@@ -3971,16 +4267,22 @@
     renderTagMenu();
   }
 
-  function chooseTag(i) {
+  function chooseTag(i, lookIndex) {
     const item = tag?.items[i];
     if (!item) return;
     const v = promptEl.value;
     let head = v.slice(0, tag.start), tail = v.slice(promptEl.selectionStart);
     let insert;
     if (tag.sigil === '@') {
-      insert = '@' + item.name + ' ';
+      const { c } = item;
+      const looks = looksOf(c);
+      const look = looks[lookIndex ?? item.look] || looks[0];
+      insert = mentionOf(c, look) + ' ';
       if (tail.startsWith(' ')) tail = tail.slice(1);
-      if (!picked.has(item.id)) togglePicked(item.id);
+      // Tagging another look of someone already in the shot swaps it, earlier mentions too.
+      head = retagText(head, c, look.key);
+      tail = retagText(tail, c, look.key);
+      if (pickedOf(c) !== look.key) pickLook(look.key, { retag: false });
       castBtn.classList.remove('tagged');
       void castBtn.offsetWidth;
       castBtn.classList.add('tagged');
@@ -4004,7 +4306,15 @@
     const n = tag.items.length;
     const people = tag.sigil === '@';
     const step = { ArrowDown: people ? 1 : 5, ArrowUp: people ? -1 : -5, ArrowRight: people ? 0 : 1, ArrowLeft: people ? 0 : -1 }[e.key];
-    if (step && n) { e.preventDefault(); tag.act = (tag.act + step + n) % n; paintActive(); }
+    // ←→ on someone with versions moves between their looks.
+    const row = people && n ? tag.items[tag.act] : null;
+    const looks = row ? looksOf(row.c).length : 0;
+    if (looks > 1 && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+      e.preventDefault();
+      row.look = (row.look + (e.key === 'ArrowRight' ? 1 : -1) + looks) % looks;
+      renderTagMenu();
+      tagMenu.querySelector('.act')?.scrollIntoView({ block: 'nearest' });
+    } else if (step && n) { e.preventDefault(); tag.act = (tag.act + step + n) % n; paintActive(); }
     else if ((e.key === 'Enter' || e.key === 'Tab') && !e.shiftKey && !e.isComposing && n) { e.preventDefault(); e.stopImmediatePropagation(); chooseTag(tag.act); }
     else if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); closeTag(); }
   }, true);
@@ -4013,15 +4323,19 @@
   promptEl.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== promptEl) closeTag(); }, 120));
   window.addEventListener('resize', () => { if (tag) placeTagMenu(); });
 
-  // "@Name" typed or pasted in full counts as tagging them.
+  // "@Name" or "@Name (Version)" typed or pasted in full counts as tagging that
+  // look. Someone whose picked look is mentioned already is left as they are.
   promptEl.addEventListener('input', () => {
-    const text = promptEl.value.toLowerCase();
+    const text = promptEl.value;
     let changed = false;
     for (const c of cast) {
-      if (picked.has(c.id)) continue;
-      const at = '@' + c.name.toLowerCase();
-      const i = text.indexOf(at);
-      if (i >= 0 && !/\w/.test(text[i + at.length] || '')) { picked.add(c.id); changed = true; }
+      const before = pickedOf(c);
+      if (before && mentionRe(c, lookAt(before).look).test(text)) continue;
+      const found = looksOf(c).find((l) => mentionRe(c, l).test(text));
+      if (!found || found.key === before) continue;
+      if (before) picked.delete(before);
+      picked.add(found.key);
+      changed = true;
     }
     if (changed) { persist(); renderCast(); }
   });
@@ -4040,24 +4354,39 @@
   async function reloadCast(select) {
     try {
       cast = (await api('/api/characters')).characters;
-      if (select) picked.add(select);
-      renderCast();
+      if (select) pickLook(select);
+      else renderCast();
     } catch (e) { toast(e.message); }
+  }
+
+  // A rename moves a character (or a version) to a new key; whatever was
+  // picked under the old one follows it.
+  function repoint(fromKey, toKey) {
+    if (fromKey === toKey) return;
+    let moved = false;
+    for (const k of [...picked]) {
+      const next = k === fromKey ? toKey : !fromKey.includes(':') && personOf(k) === fromKey ? toKey + k.slice(fromKey.length) : '';
+      if (next) { picked.delete(k); picked.add(next); moved = true; }
+    }
+    if (moved) persist();
   }
 
   // ---- editor ----
   let editing = null; // null = creating
+  let edLook = ''; // the look being edited: the character's id, or "id:version"
+  const edCur = () => (editing ? looksOf(editing).find((l) => l.key === edLook) || looksOf(editing)[0] : null);
+  const drawCost = () => (state.billing?.mode === 'credits' ? 'uses account credits' : 'about 5¢ a shot');
 
-  function openEditor(character) {
+  function openEditor(character, lookKey) {
     editing = character;
+    edLook = character ? (looksOf(character).some((l) => l.key === lookKey) ? lookKey : character.id) : '';
     $('edTitle').textContent = character ? 'Edit character' : 'New character';
     $('edName').value = character?.name || '';
-    $('edDesc').value = character?.description || '';
     edMagic.reset();
     chosenCands.clear();
     $('edDelete').classList.toggle('hide', !character);
-    renderEditorRefs();
-    renderCandidates();
+    closeNewLook();
+    renderEditorLook();
     voiceTab = 'library';
     designPreviews = [];
     cloneFiles = [];
@@ -4075,35 +4404,212 @@
     editing = null;
   }
 
+  // ---- versions in the editor ----
+  // Chips across the top pick which look the description, pictures and
+  // drawing below belong to. Name and voice are the person's, shared by all.
+  function renderEditorLook() {
+    const look = edCur();
+    $('edDesc').value = look ? look.description || '' : '';
+    $('edDesc').placeholder = look?.id
+      ? `How they look as ${look.name}: a pale Halloween ghoul with glowing green eyes and a tattered black cloak`
+      : 'early 30s, short dark curly hair, freckles, green field jacket';
+    $('edDescFor').textContent = look?.id ? `· ${look.name}` : '';
+    $('edLookName').value = look?.id ? look.name : '';
+    renderEditorLooks();
+    renderEditorRefs();
+    renderCandidates();
+  }
+
+  function renderEditorLooks() {
+    $('edLooksField').classList.toggle('hide', !editing);
+    if (!editing) return;
+    const look = edCur();
+    const add = el('button', 'look add', '＋ New version');
+    add.type = 'button';
+    add.title = `Another look of ${editing.name}: Spooky, Cartoon, Anime…`;
+    add.onclick = (e) => { e.stopPropagation(); openNewLook(); };
+    const chips = lookChips(editing, { on: look.key, choose: switchLook, extra: add });
+    chips.id = 'edLooks';
+    chips.classList.add('ed-looks');
+    $('edLooks').replaceWith(chips);
+    $('edLookNameRow').classList.toggle('hide', !look.id);
+    $('edLooksNote').textContent = editing.versions?.length
+      ? `· ${editing.versions.length + 1} looks, one voice`
+      : '· other looks of them, each with its own reference images';
+  }
+
+  async function switchLook(key) {
+    if (!editing || key === edLook) return;
+    if (!(await saveLookDraft())) return;
+    edLook = key;
+    chosenCands.clear();
+    edMagic.reset();
+    closeNewLook();
+    renderEditorLook();
+  }
+
+  // What was typed for one look is saved before moving to another, so
+  // switching never throws an edit away.
+  async function saveLookDraft() {
+    const look = edCur();
+    if (!editing || !look) return true;
+    const description = $('edDesc').value.trim();
+    const name = look.id ? $('edLookName').value.trim() : '';
+    if (description === (look.description || '') && (!name || name === look.name)) return true;
+    try {
+      await saveLook(look, { description, name });
+      return true;
+    } catch (e) {
+      toast(e.message);
+      return false;
+    }
+  }
+
+  async function saveLook(look, { description, name }) {
+    if (!look.id) {
+      editing = (await api('/api/characters/update', { id: editing.id, description })).character;
+      return;
+    }
+    const before = editing;
+    const r = await api('/api/characters/versions/update', { id: editing.id, version: look.id, description, ...(name ? { name } : {}) });
+    editing = r.character;
+    if (r.version.key !== look.key) {
+      // Renamed: the pick and the prompt's mentions follow.
+      if (edLook === look.key) edLook = r.version.key;
+      repoint(look.key, r.version.key);
+      const text = promptEl.value.replace(mentionRe(before, look, 'gi'), mentionOf(editing, r.version));
+      if (text !== promptEl.value) { promptEl.value = text; promptEl.dispatchEvent(new Event('input')); }
+    }
+  }
+
+  const LOOK_IDEAS = [
+    ['Spooky', 'a spooky Halloween version of themselves: pale ghostly skin, dark-ringed eyes, gothic black clothing'],
+    ['Cartoon', 'a bold, friendly 2D cartoon: clean outlines, flat bright colours, slightly exaggerated proportions'],
+    ['Anime', 'anime style: clean line art, cel shading, large expressive eyes, vivid colours'],
+    ['Claymation', 'a stop-motion claymation figure: sculpted modelling clay, visible thumbprints, soft rounded forms'],
+    ['3D animated', 'a 3D animated feature-film character: stylised proportions, expressive face, smooth rendered skin'],
+    ['Pixel art', 'a 16-bit pixel-art sprite: chunky visible pixels, a limited palette, crisp edges'],
+    ['Superhero', 'a comic-book superhero: a costume in their own colours with a cape and an emblem, bold inked lines'],
+    ['Watercolour', 'a loose watercolour illustration: soft washes, visible paper texture, gentle colour bleeds']
+  ];
+
+  function openNewLook() {
+    if (!editing) return;
+    $('edNewWho').textContent = editing.name;
+    $('edNewName').value = '';
+    $('edNewDesc').value = '';
+    const ideas = $('edIdeas');
+    ideas.innerHTML = '';
+    const taken = new Set(looksOf(editing).map((l) => l.name.toLowerCase()));
+    for (const [name, description] of LOOK_IDEAS) {
+      if (taken.has(name.toLowerCase())) continue;
+      const b = el('button', 'look', name);
+      b.type = 'button';
+      b.title = description;
+      b.setAttribute('aria-pressed', 'false');
+      b.onclick = () => {
+        $('edNewName').value = name;
+        $('edNewDesc').value = description;
+        for (const x of ideas.children) x.setAttribute('aria-pressed', String(x === b));
+      };
+      ideas.appendChild(b);
+    }
+    syncNewLook();
+    $('edNewLook').classList.remove('hide');
+    $('edNewLook').scrollIntoView({ block: 'nearest' });
+    $('edNewName').focus();
+  }
+  function closeNewLook() { $('edNewLook').classList.add('hide'); }
+
+  function syncNewLook() {
+    if (!editing) return;
+    const main = looksOf(editing)[0];
+    const ready = !!(state.characterRefsReady ?? state.enhanceReady);
+    const from = main.refs.length > 0 || !!main.description;
+    $('edNewGo').classList.toggle('off', !ready || !from);
+    $('edNewNote').textContent = !ready
+      ? 'Drawing is unavailable here. Create it empty, then add pictures of the new look.'
+      : !from
+        ? `Give ${editing.name} a reference image or a description first, so there is someone to redraw.`
+        : main.refs.length
+          ? `Nano Banana 2 · four takes drawn from ${editing.name}’s Reference images · ${drawCost()}. Keep the ones that look right.`
+          : `Nano Banana 2 · four takes from ${editing.name}’s description · ${drawCost()}. Keep the ones that look right.`;
+  }
+
+  async function createLook(imagine) {
+    if (!editing) return;
+    const name = $('edNewName').value.trim();
+    const description = $('edNewDesc').value.trim();
+    if (!name) { toast('Name the version first, like Spooky'); $('edNewName').focus(); return; }
+    if (imagine && $('edNewGo').classList.contains('off')) return;
+    if (!(await saveLookDraft())) return;
+    try {
+      const r = await api('/api/characters/versions', { id: editing.id, name, description });
+      editing = r.character;
+      edLook = r.version.key;
+      chosenCands.clear();
+      closeNewLook();
+      renderEditorLook();
+      reloadCast();
+      if (imagine) $('edDraw').click();
+      else toast(`${editing.name} has a ${r.version.name} version. Add pictures of it, or imagine some.`);
+    } catch (e) { toast(e.message); }
+  }
+  $('edNewGo').onclick = () => createLook(true);
+  $('edNewEmpty').onclick = () => createLook(false);
+  $('edNewCancel').onclick = closeNewLook;
+  $('edNewName').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); createLook(!$('edNewGo').classList.contains('off')); } };
+
+  $('edLookDelete').onclick = async () => {
+    const look = edCur();
+    if (!look?.id || !confirm(`Delete ${editing.name}’s ${look.name} version? Its reference images go with it. Generations already made are untouched.`)) return;
+    try {
+      editing = (await api('/api/characters/versions/delete', { id: editing.id, version: look.id })).character;
+      picked.delete(look.key);
+      persist();
+      edLook = editing.id;
+      renderEditorLook();
+      reloadCast();
+      toast(`Deleted the ${look.name} version`);
+    } catch (e) { toast(e.message); }
+  };
+
   function renderEditorRefs() {
     const box = $('edRefs');
     box.innerHTML = '';
-    const refs = editing?.refs || [];
+    const look = edCur();
+    const refs = look?.refs || [];
     $('edRefCount').textContent = editing ? `· ${refs.length} of 8` : '· save first, then add images';
     $('edDrop').classList.toggle('hide', !editing || refs.length >= 8);
+    $('edDrop').textContent = look?.id
+      ? refs.length
+        ? `Paste, drop or click ＋ to add images of ${editing.name} as ${look.name}`
+        : `No pictures of ${look.name} yet, so ${mentionOf(editing, look)} borrows the Reference images for now. Imagine some below, or paste, drop or click ＋ to add your own.`
+      : 'Paste, drop or click ＋ to add images of this character';
     syncDrawButton();
     for (const file of refs) {
-      const d = el('div', 'ed-ref' + (file === editing.cover ? ' cover' : ''));
-      d.title = file === editing.cover ? 'This is the cover' : 'Click to make this the cover';
+      const d = el('div', 'ed-ref' + (file === look.cover ? ' cover' : ''));
+      d.title = file === look.cover ? 'This is the cover' : 'Click to make this the cover';
       const img = document.createElement('img');
-      img.src = charRefUrl(editing, file);
+      img.src = charRefUrl(look.key, file);
       img.alt = '';
       d.appendChild(img);
-      if (file === editing.cover) d.appendChild(el('div', 'tag', 'COVER'));
+      if (file === look.cover) d.appendChild(el('div', 'tag', 'COVER'));
       const rm = el('button', 'rm', '✕');
       rm.title = 'Remove this reference';
       rm.onclick = async (e) => {
         e.stopPropagation();
         try {
-          const r = await api('/api/characters/refs/delete', { id: editing.id, file });
-          editing = r.character;
+          editing = (await api('/api/characters/refs/delete', { id: look.key, file })).character;
           renderEditorRefs();
           reloadCast();
         } catch (err) { toast(err.message); }
       };
       d.onclick = async () => {
         try {
-          editing = (await api('/api/characters/update', { id: editing.id, cover: file })).character;
+          editing = look.id
+            ? (await api('/api/characters/versions/update', { id: editing.id, version: look.id, cover: file })).character
+            : (await api('/api/characters/update', { id: editing.id, cover: file })).character;
           renderEditorRefs();
           reloadCast();
         } catch (err) { toast(err.message); }
@@ -4128,11 +4634,14 @@
   // ---- draw a reference sheet ----
   // Five independent generations from one description give five different
   // people, so the server seeds one portrait and draws the rest from it. They
-  // arrive as candidates and only become references once you pick them.
+  // arrive as candidates and only become references once you pick them. A
+  // version with no pictures yet gets four takes on the new look instead,
+  // each redrawn from the Reference images.
   const chosenCands = new Set();
 
   function renderCandidates() {
-    const cands = editing?.candidates || [];
+    const look = edCur();
+    const cands = look?.candidates || [];
     $('edCandField').classList.toggle('hide', !cands.length);
     for (const f of [...chosenCands]) if (!cands.includes(f)) chosenCands.delete(f);
     $('edCandCount').textContent = cands.length ? `· ${chosenCands.size} of ${cands.length} picked` : '';
@@ -4142,7 +4651,7 @@
       const d = el('div', 'ed-ref cand' + (chosenCands.has(file) ? ' on' : ''));
       d.title = chosenCands.has(file) ? 'Picked. Click to unpick.' : 'Click to keep this one';
       const img = document.createElement('img');
-      img.src = charRefUrl(editing, file);
+      img.src = charRefUrl(look.key, file);
       img.alt = '';
       d.append(img, el('div', 'tick', chosenCands.has(file) ? '✓' : ''));
       d.onclick = () => {
@@ -4157,34 +4666,46 @@
 
   function syncDrawButton() {
     const btn = $('edDraw');
-    const can = !!editing && (state.characterRefsReady ?? state.enhanceReady) && (editing.description || editing.refs.length);
-    btn.classList.toggle('off', !can);
-    const room = editing ? 8 - editing.refs.length : 0;
+    const look = edCur();
+    const ready = !!(state.characterRefsReady ?? state.enhanceReady);
+    const main = editing ? looksOf(editing)[0] : null;
+    // A version with nothing of its own is imagined from the main look.
+    const takes = !!look?.id && !look.refs.length;
+    const source = !editing ? false : takes ? main.refs.length > 0 || !!(look.description || main.description) : !!(look.description || look.refs.length);
+    btn.classList.toggle('off', !(editing && ready && source));
+    btn.textContent = takes ? `✦ Imagine 4 takes of ${look.name}` : '✦ Draw 5 reference shots';
+    const room = look ? 8 - look.refs.length : 0;
     btn.title = !editing
       ? 'Save the character first'
-      : !(state.characterRefsReady ?? state.enhanceReady)
+      : !ready
         ? 'Reference generation is unavailable'
-        : !editing.description && !editing.refs.length
+        : !source
           ? 'Write a description first. There is nothing to draw from yet.'
-          : editing.refs.length
-            ? 'Draw more angles of the reference this character already has'
-            : 'Draw a reference sheet from the description';
+          : takes
+            ? `Redraw ${editing.name}’s Reference images as ${look.name}`
+            : look.refs.length
+              ? 'Draw more angles of the reference this look already has'
+              : 'Draw a reference sheet from the description';
     $('edDrawNote').textContent = !editing
       ? ''
-      : editing.refs.length
-        ? `Nano Banana 2 · drawn from the reference above so it stays the same character · room for ${room} more`
-        : 'Nano Banana 2 · one portrait, then four more angles drawn from it · about 5¢ a shot';
+      : takes
+        ? `Nano Banana 2 · four takes on the new look, drawn from ${main.refs.length ? 'the Reference images' : 'the description'} · ${drawCost()}`
+        : look.refs.length
+          ? `Nano Banana 2 · drawn from the reference above so it stays the same character · room for ${room} more`
+          : state.billing?.mode === 'credits' ? 'Nano Banana 2 · one portrait, then four more angles drawn from it · uses account credits' : 'Nano Banana 2 · one portrait, then four more angles drawn from it · about 5¢ a shot';
   }
 
   let drawJob = null;
   $('edDraw').onclick = async () => {
     const btn = $('edDraw');
     if (btn.classList.contains('off') || btn.classList.contains('working')) return;
+    const look = edCur();
+    const takes = !!look.id && !look.refs.length;
     btn.classList.add('working');
-    $('edDrawNote').textContent = 'Drawing…';
+    $('edDrawNote').textContent = takes ? 'Imagining…' : 'Drawing…';
     try {
-      const r = await api('/api/characters/refs/generate', { id: editing.id, count: 5 });
-      drawJob = { id: r.job, characterId: editing.id };
+      const r = await api('/api/characters/refs/generate', { id: look.key, count: takes ? 4 : 5 });
+      drawJob = { id: r.job, characterId: look.key };
     } catch (e) {
       toast(e.message);
       btn.classList.remove('working');
@@ -4196,27 +4717,30 @@
   // re-reading the character is all it takes to show it.
   async function onDrawProgress(job) {
     if (!drawJob || job.id !== drawJob.id) return;
+    const mine = editing && personOf(job.characterId) === editing.id;
     if (job.status === 'running' || job.status === 'queued') {
       $('edDrawNote').textContent = job.phase && job.phase !== 'starting' ? `Drawing: ${job.phase}` : 'Drawing…';
-      if (editing?.id === job.characterId) await refreshEditing();
+      if (mine) await refreshEditing();
       return;
     }
     drawJob = null;
     $('edDraw').classList.remove('working');
     if (job.status === 'error') toast(job.error);
     else if (job.item?.failed) toast(`${job.item.files.length} of ${job.item.files.length + job.item.failed} shots came back. ${job.item.error}`);
-    if (editing?.id === job.characterId) await refreshEditing();
+    if (mine) await refreshEditing();
     else reloadCast();
     syncDrawButton();
   }
 
   // Re-read the character being edited, keeping the panel in step with disk.
+  // The description box is left alone: you may be typing in it.
   async function refreshEditing() {
     if (!editing) return;
-    const fresh = (await api('/api/characters')).characters.find((c) => c.id === editing.id);
+    cast = (await api('/api/characters')).characters;
+    const fresh = cast.find((c) => c.id === editing.id);
     if (!fresh) return;
     editing = fresh;
-    cast = (await api('/api/characters')).characters;
+    renderEditorLooks();
     renderEditorRefs();
     renderCandidates();
     renderCast();
@@ -4224,17 +4748,18 @@
 
   $('edKeep').onclick = async () => {
     if (!chosenCands.size) return;
+    const look = edCur();
     try {
-      const r = await api('/api/characters/refs/keep', { id: editing.id, files: [...chosenCands] });
-      editing = r.character;
+      const r = await api('/api/characters/refs/keep', { id: look.key, files: [...chosenCands] });
       chosenCands.clear();
       // Whatever was not picked has served its purpose.
-      editing = (await api('/api/characters/candidates/clear', { id: editing.id })).character;
+      editing = (await api('/api/characters/candidates/clear', { id: look.key })).character;
+      renderEditorLooks();
       renderEditorRefs();
       renderCandidates();
-      syncDrawButton();
       reloadCast();
-      toast(`Kept ${r.kept.length}. ${editing.name} now has ${editing.refs.length} reference${editing.refs.length === 1 ? '' : 's'}`);
+      const now = edCur();
+      toast(`Kept ${r.kept.length}. ${lookLabel(editing, now)} now has ${plural(now.refs.length, 'reference')}`);
     } catch (e) {
       toast(e.message);
       await refreshEditing();
@@ -4243,7 +4768,7 @@
 
   $('edDiscard').onclick = async () => {
     try {
-      editing = (await api('/api/characters/candidates/clear', { id: editing.id })).character;
+      editing = (await api('/api/characters/candidates/clear', { id: edCur().key })).character;
       chosenCands.clear();
       renderCandidates();
     } catch (e) { toast(e.message); }
@@ -4264,13 +4789,14 @@
   async function addEditorRefs(files) {
     if (!editing) { toast('Save the character first, then add references'); return; }
     let added = 0;
+    const look = edCur();
     for (const f of files) {
       if (!f || !f.type.startsWith('image/')) continue;
       try {
-        const r = await api('/api/characters/refs', { id: editing.id, dataUrl: await fileToDataUrl(f) });
+        const r = await api('/api/characters/refs', { id: look.key, dataUrl: await fileToDataUrl(f) });
         editing = r.character;
         added += r.existed ? 0 : 1;
-        if (r.existed) toast(editing.name + ' already had that image');
+        if (r.existed) toast(lookLabel(editing, look) + ' already had that image');
       } catch (e) {
         toast(e.message);
         break;
@@ -4554,18 +5080,22 @@
     if (!name) { $('edName').focus(); return; }
     try {
       if (editing) {
-        editing = (await api('/api/characters/update', { id: editing.id, name, description })).character;
+        const look = edCur();
+        const oldId = editing.id;
+        // The person's name, then the look's own words (and a version's name).
+        editing = (await api('/api/characters/update', { id: editing.id, name, ...(look.id ? {} : { description }) })).character;
+        repoint(oldId, editing.id);
+        if (look.id) await saveLook({ ...look, key: `${editing.id}:${look.id}` }, { description, name: $('edLookName').value.trim() });
         await reloadCast();
-        // The id follows the name, so keep editing the character that came back
-        // rather than a stale one, and leave the panel open to add references.
-        renderEditorRefs();
         toast('Saved ' + editing.name);
         closeEditor();
       } else {
         editing = (await api('/api/characters', { name, description })).character;
+        edLook = editing.id;
         await reloadCast(editing.id);
         $('edTitle').textContent = 'Edit character';
         $('edDelete').classList.remove('hide');
+        renderEditorLooks();
         renderEditorRefs();
         renderEditorVoice();
         toast('Add a reference image or two so ' + editing.name + ' stays consistent');
@@ -4574,39 +5104,101 @@
   };
 
   $('edDelete').onclick = async () => {
-    if (!editing || !confirm(`Delete “${editing.name}”? This cannot be undone. Generations already made are untouched.`)) return;
+    const versions = editing?.versions?.length ? ` and its ${plural(editing.versions.length, 'version')}` : '';
+    if (!editing || !confirm(`Delete “${editing.name}”${versions}? This cannot be undone. Generations already made are untouched.`)) return;
     try {
       await api('/api/characters/delete', { id: editing.id });
-      picked.delete(editing.id);
+      for (const k of [...picked]) if (personOf(k) === editing.id) picked.delete(k);
+      persist();
       closeEditor();
       await reloadCast();
     } catch (e) { toast(e.message); }
   };
 
-  // Take a generation you liked and make it one of a character's references.
-  // With one character saved it just goes there; with several, the cast picker
-  // is where you say which — so the action never guesses wrong silently.
-  async function promoteToCharacter(item) {
+  // ---- add a generation to the cast ----
+  // A shot you liked becomes one of a look's references: the main look, a
+  // version, or a new version made from it there and then. That is the loop
+  // that grows a character: prompt "@Nora as a Halloween ghoul", keep the one
+  // that works as her Spooky version, and tag "@Nora (Spooky)" from then on.
+  const addMenu = el('div');
+  addMenu.id = 'addMenu';
+  document.body.appendChild(addMenu);
+  closeOnOutside(addMenu);
+
+  function promoteToCharacter(item, anchor) {
     if (!cast.length) {
       showSide('cast');
       if (!pinned()) openDrawer();
       toast('Make a character first, then add this shot to it');
       return;
     }
-    let target = cast.length === 1 ? cast[0] : cast.find((c) => picked.has(c.id) && picked.size === 1);
-    if (!target) {
-      const names = cast.map((c, i) => `${i + 1}. ${c.name}`).join('\n');
-      const answer = prompt(`Add this image to which character?\n\n${names}\n\nType a number or a name:`, '');
-      if (!answer) return;
-      const byIndex = cast[Number(answer) - 1];
-      target = byIndex || cast.find((c) => c.name.toLowerCase() === answer.trim().toLowerCase());
-      if (!target) { toast(`No character called “${answer}”`); return; }
-    }
+    renderAddMenu(item);
+    closePopups(addMenu);
+    addMenu.classList.add('open');
+    if (anchor) placePopup(addMenu, anchor);
+    else Object.assign(addMenu.style, { left: '50%', top: '30%', transform: 'translateX(-50%)' });
+  }
+
+  async function addShotTo(item, key) {
     try {
-      const r = await api('/api/characters/refs', { id: target.id, folder: item.folder ?? folder, file: item.file });
+      const r = await api('/api/characters/refs', { id: key, folder: item.folder ?? folder, file: item.file });
+      addMenu.classList.remove('open');
       await reloadCast();
-      toast(r.existed ? `${target.name} already had that reference` : `Added to ${target.name} (${r.character.refs.length} reference${r.character.refs.length === 1 ? '' : 's'})`);
+      const hit = lookAt(key);
+      const label = hit ? lookLabel(hit.c, hit.look) : key;
+      toast(r.existed ? `${label} already had that reference` : `Added to ${label} (${plural(hit?.look.refs.length || 1, 'reference')})`);
     } catch (e) { toast(e.message); }
+  }
+
+  function renderAddMenu(item) {
+    addMenu.innerHTML = '';
+    addMenu.style.transform = '';
+    addMenu.appendChild(el('div', 'add-head', 'Add this shot to'));
+    // Whoever was in the shot comes first: it is usually one of their looks.
+    const inShot = new Set((item.characters || []).map(keyOfLabel).filter(Boolean).map(personOf));
+    const people = [...cast].sort((a, b) => inShot.has(b.id) - inShot.has(a.id));
+    for (const c of people) {
+      const row = el('div', 'cast-row');
+      const who = el('div', 'who');
+      const shot = (item.characters || []).map(keyOfLabel).find((k) => personOf(k) === c.id);
+      who.append(el('b', '', c.name), el('span', '', inShot.has(c.id) ? 'in this shot' : refsLine(looksOf(c)[0])));
+      const add = el('button', 'look add', '＋ New version');
+      add.type = 'button';
+      add.title = `Make this shot the first picture of a new look of ${c.name}`;
+      add.onclick = (e) => { e.stopPropagation(); newVersionFrom(item, c, who, add.parentElement); };
+      who.appendChild(lookChips(c, { on: shot || '', choose: (key) => addShotTo(item, key), extra: add }));
+      row.append(faceEl(c, shot), who);
+      addMenu.appendChild(row);
+    }
+  }
+
+  // "＋ New version" turns into a name box; Enter makes the version with this
+  // shot as its first reference.
+  function newVersionFrom(item, c, who, chips) {
+    const box = el('div', 'add-new');
+    const input = document.createElement('input');
+    input.placeholder = 'Name it, like Spooky';
+    input.maxLength = 40;
+    input.setAttribute('aria-label', `New version of ${c.name}`);
+    const go = el('button', 'look', 'Add');
+    go.type = 'button';
+    const make = async () => {
+      const name = input.value.trim();
+      if (!name) { input.focus(); return; }
+      try {
+        const r = await api('/api/characters/versions', { id: c.id, name });
+        await addShotTo(item, r.version.key);
+        toast(`${c.name} has a ${r.version.name} version. Tag ${mentionOf(c, r.version)} to use it.`);
+      } catch (e) { toast(e.message); }
+    };
+    go.onclick = (e) => { e.stopPropagation(); make(); };
+    input.onkeydown = (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); make(); }
+      if (e.key === 'Escape') { e.preventDefault(); box.replaceWith(chips); }
+    };
+    box.append(input, go);
+    chips.replaceWith(box);
+    input.focus();
   }
 
   // ================= the feed =================
@@ -5149,14 +5741,14 @@
       b.innerHTML = icon;
       b.title = title;
       b.setAttribute('aria-label', title);
-      b.onclick = (e) => { e.stopPropagation(); fn(); };
+      b.onclick = (e) => { e.stopPropagation(); fn(b); };
       acts.appendChild(b);
     };
     if (item.kind === 'image') {
       act(ICON.ref, 'Use as a reference for the next one', () => useAsRef(item), 'opt');
       // The loop that makes a character converge: a shot you liked becomes one
       // of the references the next shot is built from.
-      act(ICON.person, 'Add to a character', () => promoteToCharacter(item), 'opt');
+      act(ICON.person, 'Add to a character', (b) => promoteToCharacter(item, b), 'opt');
     }
     if (item.kind === 'song' && (item.lyrics || item.sung)) act(ICON.lyrics, 'Use these lyrics for the next song', () => useLyricsOf(item), 'opt');
     if (item.kind === 'voice' && (item.voice || (item.characters?.length === 1 && !item.dialogue))) act(ICON.voice, 'Speak the next line in this voice', () => useVoiceOf(item), 'opt');
@@ -5568,7 +6160,7 @@
     if (!src) return null;
     const known = new Set(ctxItems.map((c) => c.file));
     const images = (it?.images || []).filter((f) => known.has(f));
-    const characters = (it?.characters || []).map((name) => cast.find((c) => c.name === name)?.id).filter(Boolean);
+    const characters = (it?.characters || []).map(keyOfLabel).filter(Boolean);
     const base = { kind: g.kind, folder: g.folder, prompt: g.prompt, model: g.model, images, characters, count: n || g.n };
     if (g.kind === 'song') {
       return { ...base, characters: undefined, count: Math.min(base.count, 4), lyrics: it?.lyrics, instrumental: it?.instrumental, vocals: it?.vocals, bpm: it?.bpm, length: it?.length, seed: it?.seed };
@@ -5745,8 +6337,11 @@
   function autosize() {
     promptEl.style.height = 'auto';
     promptEl.style.height = Math.min(promptEl.scrollHeight, 200) + 'px';
+    paintMentions();
   }
   promptEl.addEventListener('input', autosize);
+  promptEl.addEventListener('scroll', () => { $('promptMarks').scrollTop = promptEl.scrollTop; });
+  window.addEventListener('resize', paintMentions);
 
   // Close a popup when the press lands outside it.
   //
